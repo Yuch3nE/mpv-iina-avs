@@ -33,7 +33,7 @@ This repository maintains its own patch stack. The current approach is:
 - `tools/collect_dylibs.rb`
   - collects the `libmpv` dependency set into an IINA-friendly dylib bundle
 - `tools/patches/davs2-10bit/*.patch`
-  - vendored `davs2-10bit` patches maintained in this repository
+  - vendored `davs2-10bit` patches maintained in this repository, including Apple Silicon AArch64 NEON optimizations for 10-bit decode hot paths
 - `tools/patches/ffmpeg/*.patch`
   - vendored FFmpeg-side patches maintained in this repository
 
@@ -154,6 +154,43 @@ Execution order:
   - propagates input packet `pos` through decoder output frames
   - provides the baseline needed for FFmpeg integration instead of stopping at the original 10-bit build restriction
 
+- `tools/patches/davs2-10bit/0002-enable-arm64-neon-detect-and-keep-vectorization.patch`
+  - enables the Apple Silicon / `arm64` NEON detection path in `davs2-10bit`
+  - keeps the build configuration friendly to compiler vectorization on AArch64
+  - establishes the runtime dispatch foundation for the later NEON-specific primitives
+
+- `tools/patches/davs2-10bit/0003-add-aarch64-neon-primitives-for-copy-add-avg.patch`
+  - adds initial AArch64 NEON primitives for basic pixel copy / add / average style operations
+  - reduces the cost of common low-level pixel movement and blending helpers used during motion compensation
+
+- `tools/patches/davs2-10bit/0004-add-aarch64-neon-mc-interpolation.patch`
+  - adds AArch64 NEON implementations for 10-bit luma / chroma interpolation kernels
+  - covers the direct horizontal / vertical interpolation paths used by motion compensation
+
+- `tools/patches/davs2-10bit/0005-add-aarch64-neon-mc-ext-primitives.patch`
+  - adds AArch64 NEON implementations for the extended motion-compensation interpolation paths
+  - accelerates the more expensive two-stage luma / chroma `*_ext` paths that combine horizontal and vertical filtering
+
+- `tools/patches/davs2-10bit/0006-add-aarch64-neon-deblock-luma.patch`
+  - adds AArch64 NEON implementations for 10-bit luma deblock filtering
+  - covers both horizontal and vertical luma edge filtering paths
+
+- `tools/patches/davs2-10bit/0007-add-aarch64-neon-deblock-chroma.patch`
+  - adds AArch64 NEON implementations for 10-bit chroma deblock filtering
+  - covers both horizontal and vertical chroma edge filtering paths while preserving bit-exact output
+
+- `tools/patches/davs2-10bit/0008-add-aarch64-neon-intra-basic-10bit.patch`
+  - adds AArch64 NEON implementations for the core 10-bit intra prediction modes
+  - covers the common `VERT`, `HOR`, `DC`, and `PLANE` prediction paths to reduce reconstruction cost on Apple Silicon
+
+- `tools/patches/davs2-10bit/0009-add-aarch64-neon-intra-bilinear-10bit.patch`
+  - adds an AArch64 NEON implementation for the 10-bit bilinear intra prediction path
+  - accelerates another frequently used intra reconstruction mode while preserving bit-exact output
+
+- `tools/patches/davs2-10bit/0010-export-sequence-display-color-description.patch`
+  - makes `davs2-10bit` parse AVS2 `sequence_display_extension` metadata and export the basic display / color-description fields through its public sequence-header output
+  - propagates `sample_range`, `colour_primaries`, `transfer_characteristics`, and `matrix_coefficients` so FFmpeg can tag decoded AVS2 frames correctly
+
 - `tools/patches/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch`
   - makes FFmpeg's `libdavs2` wrapper export decoder output packet-position data onto `AVFrame`
   - keeps frame-origin metadata available for debugging and higher-level inspection
@@ -170,6 +207,19 @@ Execution order:
     - sets `AV_FRAME_FLAG_INTERLACED` and `AV_FRAME_FLAG_TOP_FIELD_FIRST` correctly in `libcavsdec`
     - uses the delayed frame's own picture structure when outputting delayed frames
   - fixes the playback issue where some 1080i AVS+ samples would stutter, oscillate, or deinterlace incorrectly
+
+- `tools/patches/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch`
+  - makes FFmpeg's `libdavs2` wrapper consume the additional AVS2 sequence-display metadata exported by the local `davs2-10bit` patch stack
+  - maps AVS2 range / primaries / transfer / matrix values onto FFmpeg `AVCodecContext` and `AVFrame` color fields
+  - allows downstream tools such as `ffmpeg`, `ffplay`, `mpv`, and IINA to recognize the basic AVS2 HDR / wide-color signalling correctly
+
+## Performance
+
+Current Apple Silicon AVS2 10-bit benchmark status:
+
+- latest local comparison run shows about `1.48x` decoder speedup
+- current measured average decode time improved from about `~14.2s` to about `~9.6s` in the existing validation workflow
+- the reported result is from a bit-exact-validated comparison, not from a relaxed or output-changing optimization mode
 
 ## Default environment variables
 
@@ -192,7 +242,7 @@ Useful overrides:
 - `DEFAULT_CAVS_DRA_PATCH_PATH`
   - points to a local `ffmpeg_cavs_dra.patch`; if unset, the script fetches it from the upstream repository
 - `DAVS2_EXTRA_CFLAGS`
-  - appends extra `davs2-10bit` compiler flags; on `arm64`, the default is tuned to remain friendly to Apple Silicon vectorization
+  - appends extra `davs2-10bit` compiler flags; on `arm64`, the default is tuned to remain friendly to Apple Silicon vectorization and the vendored NEON patch stack
 - `DAVS2_EXTRA_LDFLAGS`
   - appends extra `davs2-10bit` linker flags
 - `MPV_EXTRA_MESON_FLAGS`
@@ -227,5 +277,7 @@ CI uses the vendored patch stack from this repository directly.
 ## Current status
 
 - the Apple Silicon FFmpeg / `libmpv` / IINA dependency build is reproducible
-- `davs2-10bit` builds successfully and can decode AVS2 10-bit content, though there is still room for further performance work
+- `davs2-10bit` builds successfully and can decode AVS2 10-bit content with the vendored AArch64 NEON optimization stack enabled by default
+- the current Apple Silicon `davs2-10bit` patch stack has been validated against bit-exact decode checks while significantly improving AVS2 10-bit decode throughput in local benchmark runs
 - the AVS+ interlaced field-order / deinterlace stutter issue is fixed in the current patch stack
+- AVS2 sequence-display color metadata is now propagated through `davs2-10bit` and FFmpeg, so basic tags such as range, BT.2020 matrix / primaries, and HLG transfer characteristics are visible to downstream players and tools

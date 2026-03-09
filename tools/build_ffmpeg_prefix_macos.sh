@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-require_cmd curl git cmake make patch clang pkg-config install_name_tool otool python3
+require_cmd curl git cmake make patch clang pkg-config install_name_tool otool
 
 case "$LICENSE_FLAVOR" in
   gpl|lgpl)
@@ -26,29 +26,65 @@ fetch_git_ref() {
   git -C "$dest" checkout --detach FETCH_HEAD >/dev/null
 }
 
-apply_local_davs2_macos_perf_tweaks() {
-  local configure_file="$1"
-  python3 - "$configure_file" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text(errors='ignore')
-original = text
-
-text = text.replace(
-    "if cc_check '' -fno-tree-vectorize ; then\n    CFLAGS=\"$CFLAGS -fno-tree-vectorize\"\nfi",
-    "if [ \"$ARCH\" != \"AARCH64\" ] && [ \"$ARCH\" != \"ARM\" ] && cc_check '' -fno-tree-vectorize ; then\n    CFLAGS=\"$CFLAGS -fno-tree-vectorize\"\nfi"
-)
-
-if text == original:
-  raise SystemExit('local davs2 macOS perf tweak did not match expected configure patterns')
-
-path.write_text(text)
-print(f'patched {path}')
-PY
+clang_supports_arm64_flag() {
+  local flag="$1"
+  local tmp_obj
+  tmp_obj="$(mktemp "${TMPDIR:-/tmp}/davs2-arm64-flag-check.XXXXXX.o")"
+  if printf 'int main(void) { return 0; }\n' | clang -arch arm64 -x c -c -o "$tmp_obj" - "$flag" >/dev/null 2>&1; then
+    rm -f "$tmp_obj"
+    return 0
+  fi
+  rm -f "$tmp_obj"
+  return 1
 }
 
+resolve_davs2_arm64_extra_cflags_default() {
+  local requested_mcpu="${DAVS2_APPLE_MCPU:-auto}"
+  local effective_mcpu=""
+  local -a flags=()
+
+  case "$requested_mcpu" in
+    auto)
+      for candidate in "-mcpu=native" "-mcpu=apple-m4" "-mcpu=apple-m3" "-mcpu=apple-m2" "-mcpu=apple-m1"; do
+        if clang_supports_arm64_flag "$candidate"; then
+          effective_mcpu="$candidate"
+          break
+        fi
+      done
+      ;;
+    none|'')
+      effective_mcpu=""
+      ;;
+    *)
+      effective_mcpu="-mcpu=$requested_mcpu"
+      ;;
+  esac
+
+  if [[ -n "$effective_mcpu" ]]; then
+    flags+=("$effective_mcpu")
+  fi
+  flags+=("-fvectorize" "-fslp-vectorize")
+  if [[ "${DAVS2_ENABLE_THINLTO:-0}" == "1" ]]; then
+    flags+=("-flto=thin")
+  fi
+
+  join_by ' ' "${flags[@]}"
+}
+
+resolve_davs2_arm64_extra_ldflags_default() {
+  local -a flags=()
+
+  if [[ "${DAVS2_ENABLE_THINLTO:-0}" == "1" ]]; then
+    flags+=("-flto=thin")
+  fi
+
+  if (( ${#flags[@]} == 0 )); then
+    printf ''
+    return 0
+  fi
+
+  join_by ' ' "${flags[@]}"
+}
 
 UAVS3D_GIT_URL="https://github.com/uavs3/uavs3d.git"
 UAVS3D_GIT_REF="${UAVS3D_GIT_REF:-0e20d2c291853f196c68922a264bcd8471d75b68}"
@@ -62,9 +98,19 @@ DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
 LOCAL_PATCH_ROOT="${LOCAL_PATCH_ROOT:-$SCRIPT_DIR/patches}"
 DAVS2_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
+DAVS2_ARM64_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0002-enable-arm64-neon-detect-and-keep-vectorization.patch"
+DAVS2_ARM64_PRIMITIVES_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0003-add-aarch64-neon-primitives-for-copy-add-avg.patch"
+DAVS2_ARM64_MC_INTERP_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0004-add-aarch64-neon-mc-interpolation.patch"
+DAVS2_ARM64_MC_EXT_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0005-add-aarch64-neon-mc-ext-primitives.patch"
+DAVS2_ARM64_DEBLOCK_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0006-add-aarch64-neon-deblock-luma.patch"
+DAVS2_ARM64_DEBLOCK_CHROMA_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0007-add-aarch64-neon-deblock-chroma.patch"
+DAVS2_ARM64_INTRA_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0008-add-aarch64-neon-intra-basic-10bit.patch"
+DAVS2_ARM64_INTRA_BILINEAR_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0009-add-aarch64-neon-intra-bilinear-10bit.patch"
+DAVS2_SEQ_DISPLAY_COLOR_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0010-export-sequence-display-color-description.patch"
+DAVS2_ENABLE_EXPERIMENTAL_MC_INTERP="${DAVS2_ENABLE_EXPERIMENTAL_MC_INTERP:-1}"
 if [[ "$TARGET_ARCH" == "arm64" ]]; then
-  DAVS2_EXTRA_CFLAGS_DEFAULT="-mcpu=apple-m1 -fvectorize -fslp-vectorize"
-  DAVS2_EXTRA_LDFLAGS_DEFAULT=""
+  DAVS2_EXTRA_CFLAGS_DEFAULT="$(resolve_davs2_arm64_extra_cflags_default)"
+  DAVS2_EXTRA_LDFLAGS_DEFAULT="$(resolve_davs2_arm64_extra_ldflags_default)"
 else
   DAVS2_EXTRA_CFLAGS_DEFAULT=""
   DAVS2_EXTRA_LDFLAGS_DEFAULT=""
@@ -72,6 +118,7 @@ fi
 DAVS2_EFFECTIVE_EXTRA_CFLAGS="${DAVS2_EXTRA_CFLAGS:-$DAVS2_EXTRA_CFLAGS_DEFAULT}"
 DAVS2_EFFECTIVE_EXTRA_LDFLAGS="${DAVS2_EXTRA_LDFLAGS:-$DAVS2_EXTRA_LDFLAGS_DEFAULT}"
 FFMPEG_DAVS2_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
+FFMPEG_DAVS2_COLOR_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
 FFMPEG_CAVS_DRA_MACOS_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0002-libcavs-fix-macos-build-compat.patch"
 FFMPEG_CAVS_DRA_FIELD_ORDER_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0003-libcavs-preserve-field-order-and-output-flags.patch"
 DEFAULT_CAVS_DRA_PATCH_PATH="${DEFAULT_CAVS_DRA_PATCH_PATH:-}"
@@ -80,6 +127,7 @@ CAVS_DRA_GIT_REF="${CAVS_DRA_GIT_REF:-abae276fed97ce08928f25c8f5e03fd915687f54}"
 CAVS_DRA_SOURCE_DIR="$SOURCE_ROOT/ffmpeg_cavs_dra"
 CAVS_DRA_PATCH_CACHE_PATH="$CAVS_DRA_SOURCE_DIR/ffmpeg-7.1.2_cavs_dra.patch"
 FFMPEG_CAVS_DRA_PATCH_PATH="${FFMPEG_CAVS_DRA_PATCH_PATH:-}"
+DAVS2_CONFIGURE_HOST="${DAVS2_CONFIGURE_HOST:-aarch64-apple-darwin}"
 ENABLE_LIBDAVS2=false
 SOURCE_BASENAME="ffmpeg-$FFMPEG_VERSION"
 SOURCE_ARCHIVE="$SOURCE_ROOT/$SOURCE_BASENAME.tar.xz"
@@ -141,15 +189,33 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   log "Building libdavs2"
   fetch_git_ref "$DAVS2_GIT_URL" "$DAVS2_GIT_REF" "$DAVS2_SOURCE_DIR"
 
-  if ! git -C "$DAVS2_SOURCE_DIR" apply --check "$DAVS2_PATCH_PATH"; then
-    git -C "$DAVS2_SOURCE_DIR" apply --check --ignore-space-change --ignore-whitespace "$DAVS2_PATCH_PATH"
+  davs2_patch_paths=(
+    "$DAVS2_PATCH_PATH"
+    "$DAVS2_ARM64_PATCH_PATH"
+    "$DAVS2_ARM64_PRIMITIVES_PATCH_PATH"
+  )
+  if [[ "$DAVS2_ENABLE_EXPERIMENTAL_MC_INTERP" == "1" ]]; then
+    davs2_patch_paths+=("$DAVS2_ARM64_MC_INTERP_PATCH_PATH")
+    davs2_patch_paths+=("$DAVS2_ARM64_MC_EXT_PATCH_PATH")
+    davs2_patch_paths+=("$DAVS2_ARM64_DEBLOCK_PATCH_PATH")
+    davs2_patch_paths+=("$DAVS2_ARM64_DEBLOCK_CHROMA_PATCH_PATH")
+    davs2_patch_paths+=("$DAVS2_ARM64_INTRA_PATCH_PATH")
+    davs2_patch_paths+=("$DAVS2_ARM64_INTRA_BILINEAR_PATCH_PATH")
   fi
-  if ! git -C "$DAVS2_SOURCE_DIR" apply "$DAVS2_PATCH_PATH"; then
-    git -C "$DAVS2_SOURCE_DIR" apply --ignore-space-change --ignore-whitespace "$DAVS2_PATCH_PATH"
-  fi
+  davs2_patch_paths+=("$DAVS2_SEQ_DISPLAY_COLOR_PATCH_PATH")
 
-  log "Applying local davs2 macOS perf tweaks"
-  apply_local_davs2_macos_perf_tweaks "$DAVS2_SOURCE_DIR/build/linux/configure"
+  for patch_path in "${davs2_patch_paths[@]}"; do
+    if [[ ! -f "$patch_path" ]]; then
+      echo "Missing davs2 patch file: $patch_path" >&2
+      exit 1
+    fi
+    if ! git -C "$DAVS2_SOURCE_DIR" apply --check "$patch_path"; then
+      git -C "$DAVS2_SOURCE_DIR" apply --check --ignore-space-change --ignore-whitespace "$patch_path"
+    fi
+    if ! git -C "$DAVS2_SOURCE_DIR" apply "$patch_path"; then
+      git -C "$DAVS2_SOURCE_DIR" apply --ignore-space-change --ignore-whitespace "$patch_path"
+    fi
+  done
 
   DAVS2_CONFIGURE_DIR=""
   while IFS= read -r configure_path; do
@@ -164,7 +230,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
 
   pushd "$DAVS2_CONFIGURE_DIR" >/dev/null
   davs2_configure_args=(
-    --host=aarch64-apple-darwin
+    --host="$DAVS2_CONFIGURE_HOST"
     --prefix="$DAVS2_INSTALL_ROOT"
     --disable-cli
     --enable-pic
@@ -221,13 +287,19 @@ fi
 
 log "Applying FFmpeg compatibility patches"
 if [[ "$ENABLE_LIBDAVS2" == true ]]; then
-  if [[ ! -f "$FFMPEG_DAVS2_PATCH_PATH" ]]; then
-    echo "Missing FFmpeg davs2 patch file: $FFMPEG_DAVS2_PATCH_PATH" >&2
-    exit 1
-  fi
-  if ! patch -d "$SOURCE_DIR" -p1 --forward < "$FFMPEG_DAVS2_PATCH_PATH"; then
-    patch -d "$SOURCE_DIR" -p1 --forward -l < "$FFMPEG_DAVS2_PATCH_PATH"
-  fi
+  ffmpeg_davs2_patch_paths=(
+    "$FFMPEG_DAVS2_PATCH_PATH"
+    "$FFMPEG_DAVS2_COLOR_PATCH_PATH"
+  )
+  for patch_path in "${ffmpeg_davs2_patch_paths[@]}"; do
+    if [[ ! -f "$patch_path" ]]; then
+      echo "Missing FFmpeg davs2 patch file: $patch_path" >&2
+      exit 1
+    fi
+    if ! patch -d "$SOURCE_DIR" -p1 --forward < "$patch_path"; then
+      patch -d "$SOURCE_DIR" -p1 --forward -l < "$patch_path"
+    fi
+  done
 fi
 
 if [[ -z "$FFMPEG_CAVS_DRA_PATCH_PATH" ]]; then
@@ -332,6 +404,9 @@ Target arch: $TARGET_ARCH
 Built davs2: $ENABLE_LIBDAVS2
 FFmpeg prefix: $FFMPEG_PREFIX
 Patch root: $LOCAL_PATCH_ROOT
+Davs2 configure host: $DAVS2_CONFIGURE_HOST
+Davs2 thinlto enabled: ${DAVS2_ENABLE_THINLTO:-0}
+Davs2 applemcpu override: ${DAVS2_APPLE_MCPU:-auto}
 Davs2 extra cflags: ${DAVS2_EFFECTIVE_EXTRA_CFLAGS:-<none>}
 Davs2 extra ldflags: ${DAVS2_EFFECTIVE_EXTRA_LDFLAGS:-<none>}
 Configure flags:
