@@ -3,7 +3,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-require_cmd curl git cmake make patch clang pkg-config install_name_tool otool
+require_cmd curl git cmake make patch clang pkg-config install_name_tool otool libtool
 
 case "$LICENSE_FLAVOR" in
   gpl|lgpl)
@@ -96,6 +96,13 @@ UAVS3D_INSTALL_ROOT="$WORK_ROOT/uavs3d-install"
 DAVS2_SOURCE_DIR="$SOURCE_ROOT/davs2"
 DAVS2_BUILD_DIR="$DAVS2_SOURCE_DIR/build"
 DAVS2_INSTALL_ROOT="$WORK_ROOT/davs2-install"
+AV3A_GIT_URL="${AV3A_GIT_URL:-https://github.com/nilaoda/Sourcecodeforplayer}"
+AV3A_GIT_REF="${AV3A_GIT_REF:-e7d244d29454eb04c968cd98a30587303a9c15f8}"
+AV3A_SOURCE_DIR="$SOURCE_ROOT/av3a"
+AV3A_BUILD_ROOT="$WORK_ROOT/av3a-build"
+AV3A_INSTALL_ROOT="$WORK_ROOT/av3a-install"
+AV3A_DECODER_SOURCE_DIR="$AV3A_SOURCE_DIR/av3adecoder"
+AV3A_RENDER_SOURCE_DIR="$AV3A_SOURCE_DIR/av3a_binaural_render/AudioDecoder/av3a_binaural_render"
 LOCAL_PATCH_ROOT="${LOCAL_PATCH_ROOT:-$SCRIPT_DIR/patches}"
 DAVS2_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0001-enable-10bit-build-and-propagate-frame-packet-position.patch"
 DAVS2_ARM64_PATCH_PATH="$LOCAL_PATCH_ROOT/davs2-10bit/0002-enable-arm64-neon-detect-and-keep-vectorization.patch"
@@ -119,6 +126,7 @@ DAVS2_EFFECTIVE_EXTRA_CFLAGS="${DAVS2_EXTRA_CFLAGS:-$DAVS2_EXTRA_CFLAGS_DEFAULT}
 DAVS2_EFFECTIVE_EXTRA_LDFLAGS="${DAVS2_EXTRA_LDFLAGS:-$DAVS2_EXTRA_LDFLAGS_DEFAULT}"
 FFMPEG_DAVS2_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0001-libdavs2-export-pkt_pos-from-decoder-output.patch"
 FFMPEG_DAVS2_COLOR_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0004-libdavs2-export-sequence-display-color-metadata.patch"
+FFMPEG_AV3A_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0005-libarcdav3a-add-av3a-audio-vivid-decoder.patch"
 FFMPEG_CAVS_DRA_MACOS_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0002-libcavs-fix-macos-build-compat.patch"
 FFMPEG_CAVS_DRA_FIELD_ORDER_PATCH_PATH="$LOCAL_PATCH_ROOT/ffmpeg/0003-libcavs-preserve-field-order-and-output-flags.patch"
 DEFAULT_CAVS_DRA_PATCH_PATH="${DEFAULT_CAVS_DRA_PATCH_PATH:-}"
@@ -129,6 +137,7 @@ CAVS_DRA_PATCH_CACHE_PATH="$CAVS_DRA_SOURCE_DIR/ffmpeg-7.1.2_cavs_dra.patch"
 FFMPEG_CAVS_DRA_PATCH_PATH="${FFMPEG_CAVS_DRA_PATCH_PATH:-}"
 DAVS2_CONFIGURE_HOST="${DAVS2_CONFIGURE_HOST:-aarch64-apple-darwin}"
 ENABLE_LIBDAVS2=false
+ENABLE_LIBARCDAV3A=false
 SOURCE_BASENAME="ffmpeg-$FFMPEG_VERSION"
 SOURCE_ARCHIVE="$SOURCE_ROOT/$SOURCE_BASENAME.tar.xz"
 SOURCE_URL="https://ffmpeg.org/releases/$SOURCE_BASENAME.tar.xz"
@@ -142,7 +151,8 @@ fi
 rm -rf "$SOURCE_DIR"
 tar -xf "$SOURCE_ARCHIVE" -C "$SOURCE_ROOT"
 rm -rf "$FFMPEG_PREFIX" "$UAVS3D_INSTALL_ROOT" "$UAVS3D_SOURCE_DIR" "$DAVS2_INSTALL_ROOT" "$DAVS2_SOURCE_DIR"
-mkdir -p "$FFMPEG_PREFIX" "$UAVS3D_INSTALL_ROOT"
+rm -rf "$AV3A_INSTALL_ROOT" "$AV3A_SOURCE_DIR" "$AV3A_BUILD_ROOT"
+mkdir -p "$FFMPEG_PREFIX" "$UAVS3D_INSTALL_ROOT" "$AV3A_INSTALL_ROOT"
 
 log "Building libuavs3d"
 fetch_git_ref "$UAVS3D_GIT_URL" "$UAVS3D_GIT_REF" "$UAVS3D_SOURCE_DIR"
@@ -182,6 +192,85 @@ Libs: -L\${libdir} -luavs3d
 Cflags: -I\${includedir}
 PC
 fi
+
+log "Preparing AV3A sources"
+if [[ -z "$AV3A_GIT_URL" ]]; then
+  echo "Missing AV3A_GIT_URL." >&2
+  exit 1
+fi
+fetch_git_ref "$AV3A_GIT_URL" "${AV3A_GIT_REF:-HEAD}" "$AV3A_SOURCE_DIR"
+
+log "Building AVS3 audio decoder (libAVS3AudioDec)"
+AV3A_DECODER_BUILD_DIR="$AV3A_BUILD_ROOT/avs3decoder"
+mkdir -p "$AV3A_DECODER_BUILD_DIR" "$AV3A_INSTALL_ROOT/lib"
+av3a_decoder_cflags=(-O3 -fPIC -std=c99 -Dmain=avs3_decoder_main)
+if [[ "$TARGET_ARCH" == "arm64" ]]; then
+  av3a_decoder_cflags+=(-DARCH_AARCH64 -DSUPPORT_NEON -fsigned-char)
+fi
+av3a_decoder_includes=(
+  "-I$AV3A_DECODER_SOURCE_DIR/avs3Decoder/include"
+  "-I$AV3A_DECODER_SOURCE_DIR/avs3Decoder/src"
+  "-I$AV3A_DECODER_SOURCE_DIR/libavs3_common"
+  "-I$AV3A_DECODER_SOURCE_DIR/libavs3_debug"
+)
+av3a_decoder_sources=()
+while IFS= read -r src; do
+  av3a_decoder_sources+=("$src")
+done < <(find "$AV3A_DECODER_SOURCE_DIR/avs3Decoder/src" \
+  "$AV3A_DECODER_SOURCE_DIR/libavs3_common" \
+  "$AV3A_DECODER_SOURCE_DIR/libavs3_debug" \
+  -type f -name '*.c' | sort)
+av3a_decoder_objects=()
+for src in "${av3a_decoder_sources[@]}"; do
+  rel="${src#$AV3A_DECODER_SOURCE_DIR/}"
+  obj="$AV3A_DECODER_BUILD_DIR/${rel//\//_}.o"
+  av3a_decoder_objects+=("$obj")
+  clang "${av3a_decoder_cflags[@]}" "${av3a_decoder_includes[@]}" -c "$src" -o "$obj"
+done
+libtool -static -o "$AV3A_INSTALL_ROOT/lib/libAVS3AudioDec.a" "${av3a_decoder_objects[@]}"
+
+if [[ ! -f "$AV3A_INSTALL_ROOT/lib/libAVS3AudioDec.a" ]]; then
+  echo "Static libAVS3AudioDec archive was not produced" >&2
+  exit 1
+fi
+
+log "Building AV3A binaural renderer (libav3a_binaural_render)"
+AV3A_RENDER_BUILD_DIR="$AV3A_BUILD_ROOT/av3a-render"
+mkdir -p "$AV3A_RENDER_BUILD_DIR"
+av3a_render_cflags=(-O3 -fPIC -DHAVE_CONFIG_H)
+av3a_render_cxxflags=(-O3 -fPIC -std=c++11 -DHAVE_CONFIG_H)
+av3a_render_includes=(
+  "-I$AV3A_RENDER_SOURCE_DIR"
+  "-I$AV3A_RENDER_SOURCE_DIR/ext/pffft"
+  "-I$AV3A_RENDER_SOURCE_DIR/ext/libsamplerate"
+  "-I$AV3A_RENDER_SOURCE_DIR/ext/simd"
+  "-I$AV3A_RENDER_SOURCE_DIR/ext/hrtf_database"
+  "-I$AV3A_SOURCE_DIR/av3a_binaural_render/VMFFramework/bin/VMFSDK/include/PlatForm"
+)
+av3a_render_sources=()
+while IFS= read -r src; do
+  av3a_render_sources+=("$src")
+done < <(find "$AV3A_RENDER_SOURCE_DIR" -type f \( -name '*.c' -o -name '*.cc' -o -name '*.cpp' \) \
+  ! -path '*/build/*' ! -path '*/Eigen/*' | sort)
+av3a_render_objects=()
+for src in "${av3a_render_sources[@]}"; do
+  rel="${src#$AV3A_RENDER_SOURCE_DIR/}"
+  obj="$AV3A_RENDER_BUILD_DIR/${rel//\//_}.o"
+  av3a_render_objects+=("$obj")
+  if [[ "$src" == *.c ]]; then
+    clang "${av3a_render_cflags[@]}" "${av3a_render_includes[@]}" -c "$src" -o "$obj"
+  else
+    clang++ "${av3a_render_cxxflags[@]}" "${av3a_render_includes[@]}" -c "$src" -o "$obj"
+  fi
+done
+libtool -static -o "$AV3A_INSTALL_ROOT/lib/libav3a_binaural_render.a" "${av3a_render_objects[@]}"
+
+if [[ ! -f "$AV3A_INSTALL_ROOT/lib/libav3a_binaural_render.a" ]]; then
+  echo "Static libav3a_binaural_render archive was not produced" >&2
+  exit 1
+fi
+
+ENABLE_LIBARCDAV3A=true
 
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   ENABLE_LIBDAVS2=true
@@ -343,6 +432,42 @@ if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l < "$FFMPEG_CAVS_DRA_FIEL
   exit 1
 fi
 
+if [[ ! -f "$FFMPEG_AV3A_PATCH_PATH" ]]; then
+  echo "Missing FFmpeg AV3A patch file: $FFMPEG_AV3A_PATCH_PATH" >&2
+  exit 1
+fi
+if ! patch -d "$SOURCE_DIR" -p1 --batch --forward -N -l < "$FFMPEG_AV3A_PATCH_PATH"; then
+  echo "Failed to apply FFmpeg AV3A patch: $FFMPEG_AV3A_PATCH_PATH" >&2
+  exit 1
+fi
+
+if [[ "$ENABLE_LIBARCDAV3A" == true ]]; then
+  AV3A_HEADER_SRC="$SOURCE_DIR/libavcodec/arcdav3a.h"
+  AV3A_HEADER_DST="$AV3A_INSTALL_ROOT/include/libavcodec"
+  if [[ ! -f "$AV3A_HEADER_SRC" ]]; then
+    echo "Missing AV3A header in FFmpeg source: $AV3A_HEADER_SRC" >&2
+    exit 1
+  fi
+  mkdir -p "$AV3A_HEADER_DST"
+  cp "$AV3A_HEADER_SRC" "$AV3A_HEADER_DST/"
+  av3a_private_headers=()
+  while IFS= read -r hdr; do
+    av3a_private_headers+=("$hdr")
+  done < <(find "$SOURCE_DIR/libavcodec" -maxdepth 1 -name 'avs3_*.h' -type f)
+  if (( ${#av3a_private_headers[@]} == 0 )); then
+    echo "No AV3A headers found under $SOURCE_DIR/libavcodec (avs3_*.h)" >&2
+    exit 1
+  fi
+  for hdr in "${av3a_private_headers[@]}"; do
+    cp "$hdr" "$AV3A_HEADER_DST/"
+  done
+  AV3A_COMMON_DST="$AV3A_HEADER_DST/libavs3_common"
+  mkdir -p "$AV3A_COMMON_DST"
+  if [[ -f "$SOURCE_DIR/libavcodec/libavs3_common/model.h" ]]; then
+    cp "$SOURCE_DIR/libavcodec/libavs3_common/model.h" "$AV3A_COMMON_DST/"
+  fi
+fi
+
 PKG_CONFIG_PATH_ENTRIES=("$UAVS3D_INSTALL_ROOT/lib/pkgconfig")
 CPPFLAGS_ENTRIES=("-I$UAVS3D_INSTALL_ROOT/include")
 LDFLAGS_ENTRIES=("-L$UAVS3D_INSTALL_ROOT/lib")
@@ -350,6 +475,10 @@ if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   PKG_CONFIG_PATH_ENTRIES+=("$DAVS2_INSTALL_ROOT/lib/pkgconfig")
   CPPFLAGS_ENTRIES+=("-I$DAVS2_INSTALL_ROOT/include")
   LDFLAGS_ENTRIES+=("-L$DAVS2_INSTALL_ROOT/lib")
+fi
+if [[ "$ENABLE_LIBARCDAV3A" == true ]]; then
+  CPPFLAGS_ENTRIES+=("-I$AV3A_INSTALL_ROOT/include")
+  LDFLAGS_ENTRIES+=("-L$AV3A_INSTALL_ROOT/lib")
 fi
 export PKG_CONFIG_PATH="$(join_by : "${PKG_CONFIG_PATH_ENTRIES[@]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CPPFLAGS="$(join_by ' ' "${CPPFLAGS_ENTRIES[@]}")${CPPFLAGS:+ $CPPFLAGS}"
@@ -379,6 +508,11 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   CONFIGURE_FLAGS+=(--enable-gpl --enable-version3)
 fi
 CONFIGURE_FLAGS+=(--enable-libuavs3d)
+if [[ "$ENABLE_LIBARCDAV3A" == true ]]; then
+  CONFIGURE_FLAGS+=(--enable-libarcdav3a)
+  CONFIGURE_FLAGS+=(--extra-ldflags="-L$AV3A_INSTALL_ROOT/lib")
+  CONFIGURE_FLAGS+=(--extra-libs="-lAVS3AudioDec -lav3a_binaural_render -lc++")
+fi
 if [[ "$ENABLE_LIBDAVS2" == true ]]; then
   CONFIGURE_FLAGS+=(--enable-libdavs2)
 fi
@@ -402,6 +536,7 @@ FFmpeg version: $FFMPEG_VERSION
 License flavor: $LICENSE_FLAVOR
 Target arch: $TARGET_ARCH
 Built davs2: $ENABLE_LIBDAVS2
+Built av3a: $ENABLE_LIBARCDAV3A
 FFmpeg prefix: $FFMPEG_PREFIX
 Patch root: $LOCAL_PATCH_ROOT
 Davs2 configure host: $DAVS2_CONFIGURE_HOST
@@ -409,6 +544,8 @@ Davs2 thinlto enabled: ${DAVS2_ENABLE_THINLTO:-0}
 Davs2 applemcpu override: ${DAVS2_APPLE_MCPU:-auto}
 Davs2 extra cflags: ${DAVS2_EFFECTIVE_EXTRA_CFLAGS:-<none>}
 Davs2 extra ldflags: ${DAVS2_EFFECTIVE_EXTRA_LDFLAGS:-<none>}
+AV3A git url: ${AV3A_GIT_URL:-<none>}
+AV3A install root: $AV3A_INSTALL_ROOT
 Configure flags:
 $(printf '  %s\n' "${CONFIGURE_FLAGS[@]}")
 MANIFEST
