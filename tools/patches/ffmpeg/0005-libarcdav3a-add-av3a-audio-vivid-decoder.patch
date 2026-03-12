@@ -1,0 +1,2756 @@
+diff --git a/configure b/configure
+index 98b582a..bb1426e 100644
+--- a/configure
++++ b/configure
+@@ -313,6 +313,7 @@ External library support:
+   --enable-libzimg         enable z.lib, needed for zscale filter [no]
+   --enable-libzmq          enable message passing via libzmq [no]
+   --enable-libzvbi         enable teletext support via libzvbi [no]
++  --enable-libarcdav3a     enable AV3A decoding via ArcVideo AV3A [no]
+   --enable-lv2             enable LV2 audio filtering [no]
+   --disable-lzma           disable lzma [autodetect]
+   --enable-decklink        enable Blackmagic DeckLink I/O support [no]
+@@ -1966,6 +1967,7 @@ EXTERNAL_LIBRARY_LIST="
+     libtheora
+     libtorch
+     libtwolame
++    libarcdav3a
+     libuavs3d
+     libv4l2
+     libvmaf
+@@ -3570,6 +3572,7 @@ libsvtav1_encoder_deps="libsvtav1"
+ libsvtav1_encoder_select="dovi_rpuenc"
+ libtheora_encoder_deps="libtheora"
+ libtwolame_encoder_deps="libtwolame"
++libarcdav3a_decoder_deps="libarcdav3a"
+ libuavs3d_decoder_deps="libuavs3d"
+ libvo_amrwbenc_encoder_deps="libvo_amrwbenc"
+ libvorbis_decoder_deps="libvorbis"
+@@ -7026,6 +7029,7 @@ enabled libtorch          && check_cxxflags -std=c++17 && require_cpp libtorch t
+ enabled libtwolame        && require libtwolame twolame.h twolame_init -ltwolame &&
+                              { check_lib libtwolame twolame.h twolame_encode_buffer_float32_interleaved -ltwolame ||
+                                die "ERROR: libtwolame must be installed and version must be >= 0.3.10"; }
++enabled libarcdav3a       && require libarcdav3a "libavcodec/arcdav3a.h" avs3_create_decoder -lAVS3AudioDec -lav3a_binaural_render $libm_extralibs $pthreads_extralibs -lc++
+ enabled libuavs3d         && require_pkg_config libuavs3d "uavs3d >= 1.1.41" uavs3d.h uavs3d_decode
+ enabled libv4l2           && require_pkg_config libv4l2 libv4l2 libv4l2.h v4l2_ioctl
+ enabled libvidstab        && require_pkg_config libvidstab "vidstab >= 0.98" vid.stab/libvidstab.h vsMotionDetectInit
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+index 153a9e3..8e5bdde 100644
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -1121,6 +1121,7 @@ OBJS-$(CONFIG_LIBCODEC2_DECODER)          += libcodec2.o
+ OBJS-$(CONFIG_LIBCODEC2_ENCODER)          += libcodec2.o
+ OBJS-$(CONFIG_LIBDAV1D_DECODER)           += libdav1d.o av1_parse.o
+ OBJS-$(CONFIG_LIBDAVS2_DECODER)           += libdavs2.o
++OBJS-$(CONFIG_LIBARCDAV3A_DECODER)        += libarcdav3a.o
+ OBJS-$(CONFIG_LIBFDK_AAC_DECODER)         += libfdk-aacdec.o
+ OBJS-$(CONFIG_LIBFDK_AAC_ENCODER)         += libfdk-aacenc.o
+ OBJS-$(CONFIG_LIBGSM_DECODER)             += libgsmdec.o
+diff --git a/libavcodec/allcodecs.c b/libavcodec/allcodecs.c
+index aa0fc47..5ac9e3b 100644
+--- a/libavcodec/allcodecs.c
++++ b/libavcodec/allcodecs.c
+@@ -793,6 +793,7 @@ extern const FFCodec ff_libsvtav1_encoder;
+ extern const FFCodec ff_libtheora_encoder;
+ extern const FFCodec ff_libtwolame_encoder;
+ extern const FFCodec ff_libuavs3d_decoder;
++extern const FFCodec ff_libarcdav3a_decoder;
+ extern const FFCodec ff_libvo_amrwbenc_encoder;
+ extern const FFCodec ff_libvorbis_encoder;
+ extern const FFCodec ff_libvorbis_decoder;
+diff --git a/libavcodec/arcdav3a.h b/libavcodec/arcdav3a.h
+new file mode 100644
+index 0000000..7e85f05
+--- /dev/null
++++ b/libavcodec/arcdav3a.h
+@@ -0,0 +1,52 @@
++
++#ifndef DAVS3_DAV3A_DEC_API_H
++#define DAVS3_DAV3A_DEC_API_H
++
++#include <stdint.h>
++#include "avs3_stat_meta.h"
++#include "avs3_stat_dec.h"
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#ifdef WIN32
++#define DAV3A_API __declspec(dllexport)
++#else
++#define DAV3A_API
++#endif
++
++/**
++ * ===========================================================================
++ * interface struct type defines
++ * ===========================================================================
++ */
++
++typedef void* (*PFCreateRenderer)(Avs3MetaData *metadata, int sampleRate, int blockSize);
++typedef int (*PFPutInterleavedAudioBuffer)(void* render, const float *buffer, int frameNum, int channelNum);
++typedef int (*PFGetBinauralInterleavedAudioBuffer)(void* render, float *buffer, int frameNum);
++typedef int (*PFUpdateMetadata)(void* render, Avs3MetaData *metadata);
++typedef int (*PFSetListenerPosition)(void* render, float *position, float *front, float *up);
++typedef int (*PFDestroyRenderer)(void* render);
++
++typedef AVS3DecoderHandle (*PFavs3_create_decoder)();
++typedef void (*PFavs3_destroy_decoder)(AVS3DecoderHandle hAvs3Dec);
++typedef int (*PFparse_header)(AVS3DecoderHandle hAvs3Dec, unsigned char* pData, int nLenIn, int isInitFrame, int *pnLenConsumed, unsigned short *crc);
++typedef int (*PFavs3_decode)(AVS3DecoderHandle hAvs3Dec, unsigned char* pDataIN, int nLenIn, unsigned char* pDataOut, int *pnLenOut, int *pnLenConsumed);
++
++DAV3A_API void* CreateRenderer(Avs3MetaData *metadata, int sampleRate, int blockSize);
++DAV3A_API int PutInterleavedAudioBuffer(void* render, const float *buffer, int frameNum, int channelNum);
++DAV3A_API int GetBinauralInterleavedAudioBuffer(void* render, float *buffer, int frameNum);
++DAV3A_API int UpdateMetadata(void* render, Avs3MetaData *metadata);
++DAV3A_API int SetListenerPosition(void* render, float *position, float *front, float *up);
++DAV3A_API int DestroyRenderer(void* render);
++
++DAV3A_API AVS3DecoderHandle avs3_create_decoder();
++DAV3A_API void avs3_destroy_decoder(AVS3DecoderHandle hAvs3Dec);
++DAV3A_API int parse_header(AVS3DecoderHandle hAvs3Dec, unsigned char* pData, int nLenIn, int isInitFrame, int *pnLenConsumed, unsigned short *crc);
++DAV3A_API int avs3_decode(AVS3DecoderHandle hAvs3Dec, unsigned char* pDataIN, int nLenIn, unsigned char* pDataOut, int *pnLenOut, int *pnLenConsumed);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif  /// DAVS3_DAVS3_DEC_API_H
+diff --git a/libavcodec/avs3_cnst_com.h b/libavcodec/avs3_cnst_com.h
+new file mode 100644
+index 0000000..9856f4e
+--- /dev/null
++++ b/libavcodec/avs3_cnst_com.h
+@@ -0,0 +1,417 @@
++#ifndef AVS3_CNST_COM_H
++#define AVS3_CNST_COM_H
++
++#include "avs3_options.h"
++
++#define AVS3_MAX(a,b) (((a) > (b)) ? (a) : (b))
++#define AVS3_MIN(a,b) (((a) < (b)) ? (a) : (b))
++
++#ifndef max
++#define max(a, b) (((a) > (b)) ? (a) : (b))
++#endif
++#ifndef min
++#define min(a, b) (((a) < (b)) ? (a) : (b))
++#endif
++
++#define AVS3_FALSE    0
++#define AVS3_TRUE     1
++#define AVS3_DATA_NOT_ENOUGH	2
++
++#define AVS3_PI              3.14159265358979323846264338327950288f
++#define AVS3_EPSILON         0.000000000000001f
++
++#define AVS3_SAMPLING_48KHZ  48000
++
++#define STEREO_CHANNELS      2
++#define MAX_CHANNELS         16
++
++#ifdef BS_HEADER_COMPAT
++/* Config table sizes */
++#define AVS3_SIZE_BITRATE_TABLE         16
++#ifndef MIX_EXT
++#define AVS3_SIZE_MC_CONFIG_TABLE       9
++#else
++#define AVS3_SIZE_MC_CONFIG_TABLE       10
++#endif
++#define AVS3_SIZE_FS_TABLE              9
++
++/* Header bits */
++#define SYNC_WORD_COMPAT                0xFFF
++#define NBITS_SYNC_WORD                 12
++#define NBITS_AUDIO_CODEC_ID            4
++#define NBITS_ANC_DATA_INDEX            1
++#ifdef SUPPORT_NNTYPE_LC
++#define NBITS_NN_TYPE                   3
++#endif
++#define NBITS_CODING_PROFILE            3
++#define NBITS_SAMPLING_RATE_INDEX       4
++#define NBITS_CHANNEL_NUMBER_INDEX      7
++#ifdef MIX_EXT
++#define NBITS_SOUNDBED_TYPE             2
++#endif
++#define NBITS_NUM_OBJS                  7
++#define NBITS_HOA_ORDER                 4
++#define NBITS_RESOLUTION                2
++#define NBITS_BITRATE_INDEX             4
++
++/* Total header bits for each mode */
++#ifndef SUPPORT_NNTYPE_LC
++
++#define NBITS_FRAME_HEADER_MONO         56      // 12+4+1+3+4+8+7+2+4+8, 53, pad to 56
++#define NBITS_FRAME_HEADER_STEREO       56      // 12+4+1+3+4+8+7+2+4+8, 53, pad to 56
++#define NBITS_FRAME_HEADER_MC           56      // 12+4+1+3+4+8+7+2+4+8, 53, pad to 56
++#define NBITS_FRAME_HEADER_HOA          56      // 12+4+1+3+4+8+4+2+4+8, 50, pad to 56
++#ifndef MIX_EXT
++#define NBITS_FRAME_HEADER_MIX          64      // 12+4+1+3+4+8+7+7+2+4+8, 63, pad to 64
++#define MAX_NBYTES_FRAME_HEADER         8       // maximum num bytes for frame header, in mix mode
++#else
++#define NBITS_FRAME_HEADER_MIX_SBT0     56      // 12+4+1+3+4+8+2+7+4+2+8, 55, pad to 56, mix, soundbed type 0
++#define NBITS_FRAME_HEADER_MIX_SBT1     72      // 12+4+1+3+4+8+2+7+4+7+4+2+8, 66, pad to 72, mix, soundbed type 1
++#define MAX_NBYTES_FRAME_HEADER         9       // maximum num bytes for frame header, in mix mode
++#endif
++
++#else
++
++#define NBITS_FRAME_HEADER_MONO         56      // 12+4+1+3+3+4+8+7+2+4+8, 56, pad to 56
++#define NBITS_FRAME_HEADER_STEREO       56      // 12+4+1+3+3+4+8+7+2+4+8, 56, pad to 56
++#define NBITS_FRAME_HEADER_MC           56      // 12+4+1+3+3+4+8+7+2+4+8, 56, pad to 56
++#define NBITS_FRAME_HEADER_HOA          56      // 12+4+1+3+3+4+8+4+2+4+8, 53, pad to 56
++#define NBITS_FRAME_HEADER_MIX_SBT0     64      // 12+4+1+3+3+4+8+2+7+4+2+8, 58, pad to 64, mix, soundbed type 0
++#define NBITS_FRAME_HEADER_MIX_SBT1     72      // 12+4+1+3+3+4+8+2+7+4+7+4+2+8, 69, pad to 72, mix, soundbed type 1
++#define MAX_NBYTES_FRAME_HEADER         9       // maximum num bytes for frame header, in mix mode
++
++#endif
++#endif
++
++/* Bandwidth */
++#define SWB 0
++#define FB  1
++
++/* AVS3 Supported Format */
++#define AVS3_MONO_FORMAT   0
++#define AVS3_STEREO_FORMAT 1
++#define AVS3_MC_FORMAT     2
++#define AVS3_HOA_FORMAT    3
++#ifdef MIX_DEVELOPE
++#define AVS3_MIX_FORMAT    4
++#endif
++
++#ifdef AVS3_HOA_FULL_SUPPORT
++/* Inner HOA extend format */
++#define AVS3_INNER_FOA_FORMAT   5
++#define AVS3_INNER_HOA2_FORMAT  6
++#define AVS3_INNER_HOA3_FORMAT  7
++#endif
++
++/* Codec core format */
++#define AVS3_MDCT_CORE     0
++
++/* AVS3 stereo mode */
++#define AVS3_MDCT_STEREO   0
++
++/* Frame size */
++#define N_SAMPLES_LOOKAHEAD 512
++#define FRAME_LEN           1024
++#define MAX_FRAME_LEN       (FRAME_LEN + N_SAMPLES_LOOKAHEAD)
++#define BLOCK_LEN_LONG      1024
++#define BLOCK_LEN_HALF_LONG 512
++#define BLOCK_LEN_SHORT     128
++#define MAX_OVL_SIZE        1024
++#define BLOCK_PADDING_SIZE  448
++#define N_BLOCK_SHORT       (BLOCK_LEN_LONG/BLOCK_LEN_SHORT)
++
++/* Grouping */
++#define N_GROUP_SHORT_WIN   2           // number of groups for short window frame
++
++/* Window types */
++#define ONLY_LONG_WINDOW           0
++#define ONLY_SHORT_WINDOW          1
++#define LONG_SHORT_TRANS_WINDOW    2
++#define SHORT_LONG_TRANS_WINDOW    3
++#define NBITS_TRANSFORM_TYPE       2            // nbits for transform type
++
++/* constants for transient detection */
++#define NUM_BLOCKS 8                // number of blocks in detection
++#define HP_ORDER 2                  // highpass filter order
++#define NUM_TRANS_HIST 2            // length of trans detection history
++#define MIN_ENERGY 103.37f          // minimum block energy
++#define ATTENUATION_COEFF 0.8125f   // attenuation factor of block energy
++#define TH_ENERGY_COEFF 8.0f        // energy burst threshold
++
++/* FFT */
++#define NORM_MDCT_FACTOR          0.5f
++#define FACTOR_TWIDDLE_SHORT      0.125f
++#define N_FFT_TABLE               2
++#define FFT_TABLE_SIZE32          32
++#define FFT_TABLE_SIZE64          64
++#define FFT_TABLE_SIZE128         128
++#define FFT_TABLE_SIZE256         256
++#define FFT_TABLE_SIZE512         512
++#define MAX_FFT_TABLE_SIZE        FFT_TABLE_SIZE512
++
++/* HOA */
++#define HOA_LEN_FRAME48k          FRAME_LEN
++#define MAX_HOA_CHANNELS          MAX_CHANNELS
++#define HOA_OVERLAP_SIZE          512
++#define HOA_LEN_TRANSFORM         FRAME_LEN + HOA_OVERLAP_SIZE
++#define HOA_MAX_FORE_CHANS        4
++#define MAX_HOA_BASIS             HOA_MAX_FORE_CHANS
++#define L_HOA_BASIS_ROWS          MAX_HOA_CHANNELS
++#define HOA_RCOND                 0.0625f
++#define L_HOA_BASIS_COLS          1343
++#define L_FIRST_ORDER_HOA_BASIS   108
++#define L_SECOND_ORDER_MP_BASIS   127
++#define L_SIN_TABLE_256           256
++#define L_SIN_TABLE_512           (L_SIN_TABLE_256*2)
++#define L_SIN_TABLE_768           (L_SIN_TABLE_256*3)
++#define L_SIN_TABLE_1024          (L_SIN_TABLE_256*4)
++#define HOA_BASIS_BITS            12
++#define N_BLOCK_HOA               2
++#define HOA_DELAY_BASIS           2
++
++/* HOA DMX */
++#define HOA_MAX_SFB               45
++#define MAX_HOA_DMX_CHANNELS      MAX_HOA_CHANNELS
++#define MAX_HOA_DMX_GROUPS        3
++#ifndef HOA_ILD_CBQUANT
++#define HOA_ILD_BITS              4
++#define HOA_ILD_RANGE             (1<<HOA_ILD_BITS)
++#else
++#define HOA_ILD_BITS              5
++#endif
++#define HOA_RATIO_BITS            4
++#define HOA_BITS_RATIO_RANGE      (1<<HOA_RATIO_BITS) 
++
++#ifdef AVS3_HOA_BUG_FIXED
++#define DMX_MONO                  0
++#define DMX_FULL_MS               1
++#define DMX_SFB_MS                2
++#define N_SFB_HOA_LBR             22
++#define CUTOFF_BANDS              3
++#endif
++
++#ifdef AVS3_HOA_FULL_SUPPORT
++#define FOA_BITRATE_48K            48000
++#define FOA_BITRATE_96K            96000
++#define HOA_BITRATE_192K          192000
++#define HOA_BITRATE_240K          240000
++#define HOA_BITRATE_256K          256000
++#define HOA_BITRATE_320K          320000
++#define HOA_BITRATE_384K          384000
++#define HOA_BITRATE_480K          480000
++#define HOA_BITRATE_512K          512000
++#define HOA_BITRATE_608K          608000
++#define HOA_BITRATE_640K          640000
++#define HOA_BITRATE_768K          768000
++#define HOA_BITRATE_896K          896000
++#define HOA_SIZE_BITRATE_TABLE    13
++#else
++#define HOA_BITRATE_192K          192000
++#define HOA_BITRATE_240K          240000
++#define HOA_BITRATE_256K          256000
++#define HOA_BITRATE_320K          320000
++#define HOA_BITRATE_384K          384000
++#define HOA_BITRATE_512K          512000
++#define HOA_BITRATE_608K          608000
++#define HOA_BITRATE_768K          768000
++#define HOA_BITRATE_896K          896000
++#define HOA_SIZE_BITRATE_TABLE    9
++#endif
++
++/* Stereo mode */
++#define TH_CROSS_CORR            0.3f                           // threshold of normalized cross correlation
++
++#define NBITS_MS_FLAG            1                              // nbits for ms flag
++#define NBITS_ENERGY_BALENCE     4                              // nbits for ILD
++#define ENERGY_BALENCE_RANGE     (1<<NBITS_ENERGY_BALENCE)      // range of ILD
++
++#define NBITS_SPLIT_STEREO       3                              // nbits for stereo bit split ratio
++#define BITS_SPLIT_RANGE         (1<<NBITS_SPLIT_STEREO)        // range of stereo bit split ratio
++#define EQUAL_BITS_RATIO         (BITS_SPLIT_RANGE>>1)          // ratio of equal bit split
++
++#define LR_ENGERY_RATIO_H         3.0f
++#define LR_ENGERY_RATIO_L         1.0f/LR_ENGERY_RATIO_H
++
++
++#ifdef MC_ENABLE
++#define LFE_CHANNEL_INDEX                   3                   // LFE channel idx
++#ifndef MC_TUNING
++#define WHOLE_COUPLE_THREHOLD               0.3f                // coupling threhold
++#else
++#define WHOLE_COUPLE_THREHOLD               0.5f                // coupling threhold
++#endif
++#ifndef ONLY_PAIR_ILD
++#define DEVIA_THREHOLD                      2                   // MCAC ILDMODE threhold
++#endif
++
++#ifndef MC_ILD_CBQUANT
++#define MC_EB_BITS                          4                       // nbits for energy balence
++#define ENERGY_BALENCE_SCOPE                (1 << MC_EB_BITS)       // Scope of the energy balence
++#else
++#define MC_EB_BITS                          5                       // nbits for energy balence
++#define MC_ILD_CBLEN                        30                      // mc ild codebook length
++#endif
++#define PAIR_NUM_DATA_BITS                  4                       // nbits for pair number
++#ifndef IMPR_MIX_BIT_ALLOC
++#define NBITS_MC_RATIO                      4                       // nbits for MC bit allocation ratio
++#else
++#define NBITS_MC_RATIO                      6                       // nbits for MC bit allocation ratio
++#endif
++#define BITRATE_MC_RATIO_SCOPE              (1 << NBITS_MC_RATIO)   // range of MC bit allocation ratio
++#define LFE_STATUS                          1                       // 1: on  0: off
++
++#ifdef IMPR_MIX_BIT_ALLOC
++#define SILENCE_BYTES                       8                       // bytes allocated for silence frame
++#define NBITS_SILFLAG                       1                       // nbits for silence flag of each channel
++#define NBITS_HASSILFLAG                    1                       // nbits for has silence flag for current frame
++#endif
++
++#define BIT_FRAME_MAX                       (256000 * FRAME_LEN/ AVS3_SAMPLING_48KHZ)   // max number of bits for each frame/channel
++
++#ifdef MC_LFE_PROC
++#define LFE_RESERVED_LINES                  32                  // reserved lines for LFE channel, 32 for 750Hz in long window
++#endif
++
++#endif
++
++
++#ifdef NEURAL_QC
++// Neural QC
++#define MAX_LAYERS 10           // maximum layers of encoder/decoder
++#define MAX_RATE_ITERS 6        // maximum number of iterations in rate loop
++#define MAX_QC_BS_LENGTH 1024   // maximum QC bitstream length in Bytes
++
++#define NBITS_IS_FEAT_AMPLIFIED     1       // nbits for isFeatAmplified
++#define NBITS_FEATURE_SCALE         7       // nbits for feature scale
++#ifdef SUPPORT_NNTYPE_LC
++#define NBITS_FEATURE_SCALE_LC      8       // nbits for feature scale, use all 8 bits
++#endif
++#define NBITS_NF_PARAM              3       // nbits for NF
++#define NBITS_CONTEXT_NUM_BYTES     8       // nbits for context number bytes
++#endif
++
++
++#ifdef FD_SHAPING
++
++/* Spectrum Shaping */
++#define LPC_ORDER           16                      /* The order of the LPC */
++#define LSP_ROOT_NUM        LPC_ORDER / 2           /* Number of roots in LSP calculation */
++#define PREEMPH_FAC_FB      0.9f                    /* Preemphasis factor for full-band */
++#define NUM_ITER            4                       /* Number of iteration in LSP calculation */
++#define GRID_100_POINTS     100                     /* LP analysis - number of points to evaluate Chebyshev polynomials */
++#define GAMMA_LPC           0.939999998f            /* LP weighting factor */
++#define N_SFB_FB_LONG       49                      // number of sfbs for FB long window case
++
++#define MAX_CANDIDATE_NUM       4                   // max number of candidates in 1st round VQ
++
++#define LSF_CB_NUM_HBR          7                   // number of LSF codebooks
++#define LSF_STAGE1_LEN1_HBR     9                   // 1st subvector dim in stage 1
++#define LSF_STAGE1_LEN2_HBR     7                   // 2nd subvector dim in stage 1
++#define LSF_STAGE2_LEN1_HBR     3                   // 1st subvector dim in stage 2
++#define LSF_STAGE2_LEN2_HBR     3                   // 2nd subvector dim in stage 2
++#define LSF_STAGE2_LEN3_HBR     3                   // 3rd subvector dim in stage 2
++#define LSF_STAGE2_LEN4_HBR     3                   // 4th subvector dim in stage 2
++#define LSF_STAGE2_LEN5_HBR     4                   // 5th subvector dim in stage 2
++
++#define LSF_STAGE1_CB1_SIZE_HBR     256             // CB size of stage 1 subvector 1
++#define LSF_STAGE1_CB2_SIZE_HBR     256             // CB size of stage 1 subvector 2
++#define LSF_STAGE2_CB1_SIZE_HBR     128             // CB size of stage 2 subvector 1
++#define LSF_STAGE2_CB2_SIZE_HBR     128             // CB size of stage 2 subvector 2
++#define LSF_STAGE2_CB3_SIZE_HBR     64              // CB size of stage 2 subvector 3
++#define LSF_STAGE2_CB4_SIZE_HBR     32              // CB size of stage 2 subvector 4
++#define LSF_STAGE2_CB5_SIZE_HBR     32              // CB size of stage 2 subvector 5
++
++#define LSF_STAGE1_CB1_NBITS_HBR    8               // VQ nbits of stage 1 subvector 1
++#define LSF_STAGE1_CB2_NBITS_HBR    8               // VQ nbits of stage 1 subvector 2
++#define LSF_STAGE2_CB1_NBITS_HBR    7               // VQ nbits of stage 2 subvector 1
++#define LSF_STAGE2_CB2_NBITS_HBR    7               // VQ nbits of stage 2 subvector 2
++#define LSF_STAGE2_CB3_NBITS_HBR    6               // VQ nbits of stage 2 subvector 3
++#define LSF_STAGE2_CB4_NBITS_HBR    5               // VQ nbits of stage 2 subvector 4
++#define LSF_STAGE2_CB5_NBITS_HBR    5               // VQ nbits of stage 2 subvector 5
++
++#define LSF_Q_LBR_THRESH        32000                   // bitrate threshold to use different CBs
++#define LSF_CB_NUM_LBR          5                       // number of LSF codebooks with 36 bits
++#define LSF_STAGE1_LEN1_LBR     9                       // 1st subvector dim in stage 1 with 36 bits
++#define LSF_STAGE1_LEN2_LBR     7                       // 2nd subvector dim in stage 1 with 36 bits
++#define LSF_STAGE2_LEN1_LBR     5                       // 1st subvector dim in stage 2 with 36 bits
++#define LSF_STAGE2_LEN2_LBR     4                       // 2nd subvector dim in stage 2 with 36 bits
++#define LSF_STAGE2_LEN3_LBR     7                       // 3rd subvector dim in stage 2 with 36 bits
++
++#define LSF_STAGE1_CB1_SIZE_LBR     256                 // CB size of stage 1 subvector 1 with 36 bits
++#define LSF_STAGE1_CB2_SIZE_LBR     256                 // CB size of stage 1 subvector 2 with 36 bits
++#define LSF_STAGE2_CB1_SIZE_LBR     128                 // CB size of stage 2 subvector 1 with 36 bits
++#define LSF_STAGE2_CB2_SIZE_LBR     128                 // CB size of stage 2 subvector 2 with 36 bits
++#define LSF_STAGE2_CB3_SIZE_LBR     64                  // CB size of stage 2 subvector 3 with 36 bits
++
++#define LSF_STAGE1_CB1_NBITS_LBR    8                   // VQ nbits of stage 1 subvector 1 with 36 bits
++#define LSF_STAGE1_CB2_NBITS_LBR    8                   // VQ nbits of stage 1 subvector 2 with 36 bits
++#define LSF_STAGE2_CB1_NBITS_LBR    7                   // VQ nbits of stage 2 subvector 1 with 36 bits
++#define LSF_STAGE2_CB2_NBITS_LBR    7                   // VQ nbits of stage 2 subvector 2 with 36 bits
++#define LSF_STAGE2_CB3_NBITS_LBR    6                   // VQ nbits of stage 2 subvector 3 with 36 bits
++
++#define LSF_MIN_GAP             50.0f               // Minimum LSF gap allowed
++
++#endif
++
++#ifdef TD_SHAPING
++
++// TNS
++#define TNS_MAX_FILTER_NUM              2         // TNS: max number of filters
++#define TNS_MAX_FILTER_ORDER            8         // TNS: max order of tns filter
++#define TNS_DIVISION_NUM                3         // TNS: number of spectrum divisions in autocorr calculation
++
++#define HLM_MIN_NRG                     32768.0f                    // TNS: minimum energy in each spectrum division
++#define TNS_COEFF_RES                   4                           // TNS: resolution of parcor quantization, 2^4 steps
++#define INDEX_SHIFT                     (1 << (TNS_COEFF_RES-1))    // TNS: used to shift quantization index to zero
++#define N_TNS_COEFF_CODES               16                          // TNS: number of huffman codes for parcor
++
++#define MIN_AVG_SQR_COEFF_THREHOLD      0.06f     // TNS: in tns detect, threshold for averaged square parcor coeff.
++#define MIN_PREDICTION_GAIN             1.35f     // TNS: in tns detect, threshold for prediction gain
++
++#define TNS_NBITS_ENABLE                1         // TNS: nbits for filter enable
++#define TNS_NBITS_ORDER                 3         // TNS: nbits for filter order
++
++#endif
++
++#ifdef BWE_DEVELOPE
++// BWE
++#define MAX_NUM_TILE        4       // BWE: max number of tiles in high band
++#define MAX_NUM_SFB_BWE     8       // BWE: max number of sfbs in high band
++#define LEN_HIST_WHITENING  3       // BWE: history length in whitening decision
++#define LEN_WHITEN_AVERAGE  7       // BWE: half whitening length of MIDDLE level
++
++#define NBITS_BWE_ENV               7       // BWE: nbits for bwe envelope
++#define NBITS_BWE_WHITEN_ONOFF      1       // BWE: nbits for bwe whitening ON/OFF flag
++#define NBITS_BWE_WHITEN_MIDHIGH    1       // BWE: nbits for bwe whitening MID/HIGH flag
++
++#endif
++
++/* Bitstream */
++#define AVS3_BS_BYTE_SIZE        8
++#ifndef SUPPORT_HIGH_BR_MIX
++#define MAX_BS_BYTES             5462        
++#else
++#define MAX_BS_BYTES             12300                    // max condition: for 16obj, 192kbps each, 32kHz sampling rate, 12288 bytes
++#endif
++#define MAX_NUM_BS_PARTS         (MAX_CHANNELS + 4)       // max number of bitstream parts in encoder, 4 stands for STEREO/MC/HOA/META
++#define BS_INDEX_STEREO          (MAX_CHANNELS + 1 - 1)   // bitstream part index for stereo side info
++#define BS_INDEX_MC              (MAX_CHANNELS + 2 - 1)   // bitstream part index for MC side info
++#define BS_INDEX_HOA             (MAX_CHANNELS + 3 - 1)   // bitstream part index for HOA side info
++#define BS_INDEX_META            (MAX_CHANNELS + 4 - 1)   // bitstream part index for Meta data side info
++#define MAX_NUM_INDICES          1000                     // max number of indices in each bitstream handle
++
++#ifdef MCR_INTEGRATE
++/* MCR stereo */
++#define TH_BR_MCR_STEREO        32000           // bitrate threshold for MCR stereo mode
++#define MCR_NUM_SUBSPEC         2               // number of sub-spec for MCR, odd and even spectrum now
++#define MCR_NUM_CONFIG          2               // number of MCR configs, short win and long win (includes transition)
++#define MCR_NUM_SFB_FB          18              // number of sfbs
++#define MCR_DIM_SUBVEC          3               // number of sfbs in each subvector for theta vq
++#define MCR_NUM_SUBVEC          6               // number of subvectors for theta vq
++#define MCR_VQ_NBITS_LONG       9               // num bits for mcr vq in long window frame (also transition frame)
++#define MCR_VQ_NBITS_SHORT      8               // num bits for mcr vq in short window frame
++#define MCR_VQ_CBSIZE_LONG      512             // size of VQ codebook for mcr, 9bit
++#define MCR_VQ_CBSIZE_SHORT     256             // size of VQ codebook for mcr, 8bit
++#endif
++
++#endif
+\ No newline at end of file
+diff --git a/libavcodec/avs3_const_meta.h b/libavcodec/avs3_const_meta.h
+new file mode 100644
+index 0000000..c68ec7f
+--- /dev/null
++++ b/libavcodec/avs3_const_meta.h
+@@ -0,0 +1,219 @@
++
++#ifndef _AVS3_CONST_META_H_
++#define _AVS3_CONST_META_H_
++
++#ifdef METADATA_EXT
++
++// vrEXT number bits
++#define NBITS_VR_AMBIS_ORDER        3   // 3bits  ambisonicOrder
++#define NBITS_VR_REVERBTYPE         2   // 2bits  reverbType
++#define NBITS_VR_EARLY_REFGAIN      7   // 7bits  earlyReflectionGain
++#define NBITS_VR_LATE_REVGAIN       7   // 7bits  lateReverbGain
++#define NBITS_VR_CONV_REVTYPE       5   // 5bits  convolutionReverbType
++#define NBITS_VR_NUMSURFACE         3   // 3bits  numSurface
++#define NBITS_VR_MARTERIAL          5   // 5bits  material
++#define NBITS_VR_ABSORPTION         7   // 7bits  absorption
++#define NBITS_VR_SCATTERING         7   // 7bits  scattering
++#define NBITS_VR_NUM_VER            5   // 5bits  numVertices
++#define NBITS_VR_VER_X              7   // 7bits  x
++#define NBITS_VR_VER_Y              7   // 7bits  y
++#define NBITS_VR_VER_Z              7   // 7bits  z
++#define NBITS_VR_HRTFTYPE           4   // 4bits  hrtfType
++#define NBITS_VR_HPTYPE             7   // 7bits  headphoneType[i]
++#define NBITS_VR_EFFCHAIN           3   // 3bits  effectChain
++#define NBITS_VR_NUMEQBAND          4   // 4bits  numEqband
++#define NBITS_VR_EQTYPE             3   // 3bits  eqType
++#define NBITS_VR_EQFC               7   // 7bits  eqFC
++#define NBITS_VR_EQQ                6   // 7-1bits  eqQ
++#define NBITS_VR_EQGAIN             7   // 7bits  eqGain
++#define NBITS_VR_ATT_TIME           4   // 4bits   attackTime
++#define NBITS_VR_REL_TIME           4   // 4bits   releaseTime
++#define NBITS_VR_THRESHOLD          7   // 7bits  threshold
++#define NBITS_VR_PREGAIN            7   // 7bits  preGain
++#define NBITS_VR_POSTGAIN           7   // 7bits  postGain
++#define NBITS_VR_RATIO              7   // 7bits  ratio
++#define NBITS_VR_EFFGAIN            7   // 7bits  effectGain
++
++// ADM bits
++#define NBITS_META_FLAG             1    // 1bit, flag
++#define NBITS_BASICLEVEL            3    // 3bit, basicLevel
++#define NBITS_VREXTLEVEL            3    // 3bit, vrExtLevel
++#define NBITS_AUDIO_PL              4    // 4bits, audioProgrammeLanguage
++#define NBITS_MAX_DUCK              5    // 5bits, maxDuckingDepth
++#define NBITS_LOUDNESS              5    // 5bits, integratedLoudness
++#define NBITS_LOUDNESS_RANGE        5    // 5bits, loudnessRange
++#define NBITS_TURE_PEAK             5    // 5bits, maxTruePeak
++#define NBITS_MAX_MOMNETARY         5    // 5bits, maxMomentary
++#define NBITS_SHORT_TERM            5    // 5bits, maxShortTerm
++#define NBITS_DL_LOUNDESS           5    // 5bits, maxShortTerm
++#define NBITS_ASPECT_RATIO          3    // 3bits, aspectRatio
++#define NBITS_SCREEN_AZIMUTH        8    // 8bits, screenCentrePosition_azimuth
++#define NBITS_SCREEN_ELEVATION      6    // 6bits, screenCentrePosition_elevation
++#define NBITS_SCREEN_DISTANCE       4    // 4bits, screenCentrePosition_distance
++#define NBITS_SCREEN_POLAR          7    // 7bits, screenWidth_polar
++#define NBITS_SCREEN_X              8    // 8bits, screenCentrePosition_X
++#define NBITS_SCREEN_Y              6    // 6bits, screenCentrePosition_Y
++#define NBITS_SCREEN_Z              4    // 4bits, screenCentrePosition_Z
++#define NBITS_SCREEN_CARTESIAN      7    // 7bits, screenWidth_cartesian
++#define NBITS_NUMCONTENTS           2    // 2bits, numContents
++#define NBITS_REF_CON_IDX           2    // 2bits, refcontentIdx
++#define NBITS_CON_IDX               2    // 2bits, contentIdx
++#define NBITS_CONTENT_LANGUAGE      4    // 4bits, audioContentLanguage
++#define NBITS_DIA_ATTRIBUTE         2    // 2bits, dialogueAttribute
++#define NBITS_DIA_TYPE              3    // 3bits, dialogueType
++#define NBITS_NUM_GROUPS            2    // 2bits, numComplementaryObjectGroup
++#define NBITS_NUM_COM_OBJS          3    // 3bits, numComplementaryObject
++#define NBITS_COM_OBJ_IDX           3    // 3bits, ComplementaryObjectIdx
++#define NBITS_NUM_OBJECTS           3    // 3bits, numObjects
++#define NBITS_REF_OBJ_IDX           3    // 3bits, refObjectsidx
++#define NBITS_OBJ_IDX               3    // 3bits, Objectsidx
++#define NBITS_OBJ_LANGUAGE          4    // 4bits, audioObjectLanguage
++#define NBITS_OBJ_IMPORTANCE        4    // 4bits, importance
++#define NBITS_OBJ_NAME              8    // 8bits, ObjectName
++#define NBITS_OBJ_GAINUNIT          1    // 1bit, gainUnit
++#define NBITS_OBJ_HALFGAIN          6    // 7-1 bits, gain
++#define NBITS_NUM_PACKS             3    // 3bits, numPacks
++#define NBITS_REF_PACKS_IDX         3    // 3bits, refPackFormatIdx
++#define NBITS_PACKS_IDX             3    // 3bits, PackFormatIdx
++#define NBITS_GAIN_RANGEMIN         7    // 7bits, gainInteractionRange_min
++#define NBITS_GAIN_RANGEMAX         7    // 7bits, gainInteractionRange_max
++#define NBITS_INTERACT_RANGE_XMIN   8    // 8bits, positionInteractionRange_Xmin / positionInteractionRange_azimuthMin
++#define NBITS_INTERACT_RANGE_XMAX   8    // 8bits, positionInteractionRange_Xmax / positionInteractionRange_azimuthMax
++#define NBITS_INTERACT_RANGE_YMIN   6    // 6bits, positionInteractionRange_Ymin / positionInteractionRange_elevationMin
++#define NBITS_INTERACT_RANGE_YMAX   6    // 6bits, positionInteractionRange_Ymax / positionInteractionRange_elevationMax
++#define NBITS_INTERACT_RANGE_ZMIN   4    // 4bits, positionInteractionRange_Zmin / positionInteractionRange_distanceMin
++#define NBITS_INTERACT_RANGE_ZMAX   4    // 4bits, positionInteractionRange_Zmax / positionInteractionRange_distanceMax
++#define NBITS_PACK_IMPORTANCE       4    // 4bits, pack importance
++#define NBITS_PACK_LABEL            3    // 3bits, pack label
++#define NBITS_PACK_ABSDIS           5    // 5bits, absoluteDistance
++#define NBITS_NORMALIZATION         2    // 2bits, normalization
++#define NBITS_NCFRDFDIST            4    // 4bits, nfcRefDist
++#define NBITS_SCREENREF             1    // 1bits, screenRef
++#define NBITS_HOAORDER              3    // 3bits, hoaorder
++#define NBITS_PACKFORMATID          6    // 6bits, packFormatID
++#define NBITS_NUM_MATRIXCH          5    // 5bits, numMatrixOutputChannel
++#define NBITS_PACKFORMAT_IDX        5    // 5bits, packFormatStartIdx
++#define NBITS_NUM_CHS               5    // 5bits, numChannels
++#define NBITS_REF_CH_IDX            5    // 5bits, refChannelidx
++#define NBITS_DIRECTSPEAKER_AZI     8    // 8bits, azimuth
++#define NBITS_DIRECTSPEAKER_ELE     6    // 6bits, elevation
++#define NBITS_DIRECTSPEAKER_DIS     4    // 4bits, distance
++#define NBITS_SCREEN_EDGELOCK       2    // 2bits, screenEdgeLock
++#define NBITS_CH_FORMAT_IDX         5    // 5bit, channelFormatIdx
++#define NBITS_HALF_CHGAIN           6    // 7-1bit, channelGain
++#define NBITS_TRANS_CH_REF          5    // 5bit, chRef
++#define NBITS_MATRIX_COEF           8    // 8bit, MatrixCoef[i]
++
++// Dynamic
++#define NBITS_DMLEVEL               3    // 3bits, dmLevel
++#define NBITS_DM_TRANSCHREF         5    // 3bits, transChRef
++
++// vrEXT resolution
++#define RES_VREXT_VERTEX_Z          (200.0f / ((1 << 7) - 1))       // 7bit, range [-100, 100]
++#define RES_VREXT_VERTEX_Y          (200.0f / ((1 << 7) - 1))       // 7bit, range [-100, 100]
++#define RES_VREXT_VERTEX_X          (200.0f / ((1 << 7) - 1))       // 7bit, range [-100, 100]
++#define RES_VREXT_ABSORPTION        (1.0f / ((1 << 7) - 1))         // 7bit, range [0, 1]
++#define RES_VREXT_SCATTERING        (1.0f / ((1 << 7) - 1))         // 7bit, range [0, 1]
++#define RES_VREXT_EAR_REF_GAIN      (1.0f / ((1 << 7) - 1))         // 7bit, range [0, 1]
++#define RES_VREXT_LATE_REV_GAIN     (1.0f / ((1 << 7) - 1))         // 7bit, range [0, 1]
++#define RES_VREXT_EQFC              (58.061799f / ((1 << 7) - 1))   // 7bit, range [20, 16000] convert to db [26.020599, 84.0823996]
++#define RES_VREXT_EQQ_H1            (0.9f / ((1 << 6) - 1))         // 7-1bit, range [0.1, 1]
++#define RES_VREXT_EQQ_H2            (11.0f / ((1 << 6) - 1))        // 7-1bit, range [1, 12]
++#define RES_VREXT_EQGAIN            (40.0f / ((1 << 7) - 1))        // 7bit, range [-20, 20]
++#define RES_VREXT_ATT_TIME          (99.0f / ((1 << 4) - 1))        // 4bit, range [1, 100]
++#define RES_VREXT_REL_TIME          (250.0f / ((1 << 4) - 1))       // 4bit, range [50, 300]
++#define RES_VREXT_THRESHOLD         (90.0f / ((1 << 7) - 1))        // 7bit, range [-80, 10]
++#define RES_VREXT_PREGAIN           (20.0f / ((1 << 7) - 1))        // 7bit, range [-10, 10]
++#define RES_VREXT_POSTGAIN          (20.0f / ((1 << 7) - 1))        // 7bit, range [0, 20]
++#define RES_VREXT_RATIO             (99.0f / ((1 << 7) - 1))        // 7bit, range [1, 100]
++#define RES_VREXT_EFFGAIN           (40.0f / ((1 << 7) - 1))        // 7bit, range [-20, 20]
++
++// ADM resolution
++#define RES_STATIC_RANGE_MIN            (1.0f / ((1 << 7) - 1))         // 7bit, range [0, 1]
++#define RES_STATIC_RANGE_MAX            (15.0f / ((1 << 7) - 1))        // 7bit, range (1, 16]
++#define RES_STATIC_RANGEDB_MIN          (-80.0f / ((1 << 7) - 1))       // 7bit, range [-80, 0]
++#define RES_STATIC_RANGEDB_MAX          (24.0f / ((1 << 7) - 1))        // 7bit, range (0, 24]
++#define RES_MTRIXCOEF                   (9.9f / ((1 << 8) - 1))         // 8bit, range [0.1, 10]
++#define RES_DUCKINGDEPTH                (-62.0f / ((1 << 5) - 1))       // 5bit, range [-62, 0]
++#define RES_STATIC_ABSDISTANCE          (1.230448f / ((1 << 5) - 1))    // 5bits range[0, 16]  convert to dB[0, 1.230448]
++#define RES_STATIC_NFCREFDIST           (1.0f / ((1 << 4) - 1))         // 4bits range[0, 1]
++#define RES_STATIC_OBJ_GAIN_H1          (1.0f / ((1 << 6) - 1))         // 6bit, range [0, 1]
++#define RES_STATIC_OBJ_GAIN_H2          (15.0f / ((1 << 6) - 1))        // 6bit, range (1, 16]
++#define RES_STATIC_OBJ_GAIN_DB_H1       (-80.0f / ((1 << 6) - 1))       // 6bit, range [-80, 0]
++#define RES_STATIC_OBJ_GAIN_DB_H2       (24.0f / ((1 << 6) - 1))        // 6bit, range (0, 24]
++#define RES_STATIC_OBJ_CHGAIN_H1        (1.0f / ((1 << 6) - 1))         // 6bit, range [0, 1]
++#define RES_STATIC_OBJ_CHGAIN_H2        (15.0f / ((1 << 6) - 1))        // 6bit, range (1, 16]
++#define RES_STATIC_OBJ_CHGAIN_DB_H1     (-80.0f / ((1 << 6) - 1))       // 6bit, range [-80, 0]
++#define RES_STATIC_OBJ_CHGAIN_DB_H2     (24.0f / ((1 << 6) - 1))        // 6bit, range (0, 24]
++#define RES_STATIC_X                    (2.0f / ((1 << 8) - 1))         // 8bit, range [-1, 1]
++#define RES_STATIC_Y                    (2.0f / ((1 << 6) - 1))         // 6bit, range [-1, 1]
++#define RES_STATIC_Z                    (2.0f / ((1 << 4) - 1))         // 4bit, range [-1, 1]
++#define RES_STATIC_CARTWIDTH            (1.0f / ((1 << 7) - 1))         // 7bit, range [0.0, 1]
++
++#define RES_STATIC_AZIMUTHMIN           (-180.0f / ((1 << 8) - 1))      // 8bit, range [-180, 0]
++#define RES_STATIC_AZIMUTHMAX           (180.0f / ((1 << 8) - 1))       // 8bit, range (0, 180]
++#define RES_STATIC_ELEVATIONMIN         (-90.0f / ((1 << 6) - 1))       // 6bit, range [-90, 0]
++#define RES_STATIC_ELEVATIONMAX         (90.0f / ((1 << 6) - 1))        // 6bit, range (0, 90]
++#define RES_STATIC_AZIMUTH              (360.0f / ((1 << 8) - 1))       // 8bit, range [-180, 180]
++#define RES_STATIC_ELEVATION            (180.0f / ((1 << 6) - 1))       // 6bit, range [-90, 90]
++#define RES_STATIC_SCREEELEVATION       (90.0f / ((1 << 6) - 1))        // 6bit, range [0, 90]
++#define RES_STATIC_DISTANCE             (1.0f / ((1 << 4) - 1))         // 4bit, range [0.0, 1.0]
++#define RES_STATIC_POLARWIDTH           (180.0f / ((1 << 7) - 1))       // 7bit, range [0.0, 180]
++
++#define RES_STATIC_INTEGRATEDLOUDNESS   (-70.0f / ((1 << 5) - 1))       // 5bit, range [-70, 0]
++#define RES_STATIC_LOUDNESSRANGE        (60.0f / ((1 << 5) - 1))        // 5bit, range [10, 70]
++#define RES_STATIC_MAXTRUEPEAK          (-70.0f / ((1 << 5) - 1))       // 5bit, range [-70, 0]
++#define RES_STATIC_MAXMOMENTARY         (-70.0f / ((1 << 5) - 1))       // 5bit, range [-70, 0]
++#define RES_STATIC_MAXSHORTTERM         (-70.0f / ((1 << 5) - 1))       // 5bit, range [-70, 0]
++#define RES_STATIC_DIALOGUELOUDNESS     (-70.0f / ((1 << 5) - 1))       // 5bit, range [-70, 0]
++
++/* Metadata Dynamic */
++// Level 1
++#define RES_OBJ_AZIMUTH     (360.0f / ((1 << 8) - 1))       // 8bit, range [-180, 180]
++#define RES_OBJ_ELEVATION   (180.0f / ((1 << 6) - 1))       // 6bit, range [-90, 90]
++#define RES_OBJ_DISTANCE    (1.0f / ((1 << 4) - 1))         // 4bit, range [0.0, 1.0]
++#define RES_OBJ_GAIN        (6.0f / ((1 << 7) - 1))         // 7bit, range [0.0, 6.0]
++#define RES_OBJ_WIDTH       (360.0f / ((1 << 7) - 1))       // 7bit, range [0, 360]
++#define RES_OBJ_HEIGHT      (360.0f / ((1 << 5) - 1))       // 5bit, range [0, 360]
++#define RES_OBJ_DEPTH       (1.0f / ((1 << 4) - 1))         // 4bit, range [0.0, 1.0]
++#define RES_OBJ_DIFFUSE     (1.0f / ((1 << 7) - 1))         // 7bit, range [0.0, 1.0]
++#define RES_OBJ_X           (2.0f / ((1 << 8) - 1))         // 8bit, range [-1.0, 1.0]
++#define RES_OBJ_Y           (2.0f / ((1 << 6) - 1))         // 6bit, range [-1.0, 1.0]
++#define RES_OBJ_Z           (2.0f / ((1 << 4) - 1))         // 4bit, range [-1.0, 1.0]
++#define RES_OBJ_WIDTH_X     (1.0f / ((1 << 7) - 1))         // 7bit, range [0, 1.0]
++#define RES_OBJ_HEIGHT_Y    (1.0f / ((1 << 5) - 1))         // 5bit, range [0, 1.0]
++#define RES_OBJ_DEPTH_Z     (1.0f / ((1 << 4) - 1))         // 4bit, range [0, 1.0]
++// Level 2
++#define RES_CHANNELLOCK_MAXDIST         (2.0f / ((1 << 4) - 1))     // 4bit, range [0.0, 2.0]
++#define RES_OBJ_DIVERGENCE              (1.0f / ((1 << 4) - 1))     // 4bit, range [0.0, 1.0]
++#define RES_OBJ_DIVERGENCE_AZI_RANGE    (180.0f / ((1 << 6) - 1))   // 6bit, range [0, 180]
++
++/* Metadata num bits */
++// Level 1
++#define NBITS_OBJ_AZIMUTH           8           // nbits for azimuth
++#define NBITS_OBJ_ELEVATION         6           // nbits for elevation
++#define NBITS_OBJ_DISTANCE          4           // nbits for distance
++#define NBITS_OBJ_GAIN              7           // nbits for obj gain
++#define NBITS_OBJ_WIDTH             7           // nbits for obj width
++#define NBITS_OBJ_HEIGHT            5           // nbits for obj height
++#define NBITS_OBJ_DEPTH             4           // nbits for obj depth
++#define NBITS_OBJ_DIFFUSE           7           // nbits for obj diffuse
++#define NBITS_JUMPPOSITION          1           // nbits for jump position
++#define NBITS_IMPORTANCE            4           // nbits for obj importance
++#define NBITS_OBJ_X                 8           // nbits for x
++#define NBITS_OBJ_Y                 6           // nbits for y
++#define NBITS_OBJ_Z                 4           // nbits for z
++#define NBITS_OBJ_WIDTH_X           7           // nbits for obj width x
++#define NBITS_OBJ_HEIGHT_Y          5           // nbits for obj height y
++#define NBITS_OBJ_DEPTH_Z           4           // nbits for obj depth z
++// Level 2
++#define NBITS_CHANNEL_LOCK                  1   // nbits for channel lock
++#define NBITS_CHANNELLOCK_MAXDIST           4   // nbits for channel lock, max distance
++#define NBITS_OBJ_DIVERGENCE                4   // nbits for object divergence
++#define NBITS_OBJ_DIVERGENCE_AZI_RANGE      6   // nbits for object divergence, azimuth range
++#define NBITS_OBJ_SCREEN_REF                1   // nbits for screen reference
++#define NBITS_OBJ_SCREEN_EDGE_LOCK          2   // nbits for screen edge lock
++
++#endif
++
++#endif
+diff --git a/libavcodec/avs3_options.h b/libavcodec/avs3_options.h
+new file mode 100644
+index 0000000..2343af4
+--- /dev/null
++++ b/libavcodec/avs3_options.h
+@@ -0,0 +1,89 @@
++#ifndef AVS3_OPTIONS_H
++#define AVS3_OPTIONS_H
++
++// #define DEBUG_AVS3_HOA            /* shuai: Debug AVS3 HOA init version */
++// #define BUG_FIXED_AVS3_HOA        /* shuai: Fixed HOA angle pair compute error. */
++// #define AVS3_WAVE_READER          /* shuai: Fixed wave file errors. */
++// #define LOW_DELAY_AVS3_HOA        /* shuai: Supported Low delay HOA encoding routine. */
++// #define TRANSIENT_DETECT          // for transient detection integration
++// #define DEBUG_AVS3_MDCT_TRANSFORM /* shuai: Local synthesis time domain signal */
++// #define DEBUG_AVS3_MONO           /* shuai: Support Mono format in AVS3 */
++// #define SIMULATING_HOA_DECODER    /* shuai: Simulating the integrated HOA decoding routine in encoder. */
++// #define DEBUG_AVS3_BITSTREAM      /* shuai: Bitstream I/O support for AVS3 encoder to decoder. */
++// #define AVS3_HOA_DMX              /* HOA DMX */
++//#define DEBUG_NEURAL_QC_LOCAL_SYNTH
++
++#define NEURAL_QC
++#define FD_SHAPING                  /* djc/xby: LPC based spectrum shaping */
++//#define POST_SHAPING                /* ljw/xby: post FD shaping in low bitrate */
++#define TD_SHAPING                  /* xby: TNS integration */
++#define TNS_SHORT_WIN               /* xby: for short window frame, deinterleave before TNS filtering, interleave after TNS */
++#define BWE_DEVELOPE                /* xby: BWE integration */
++
++#define MONO_INTEGRATE              /* xby: Mono mode integration */
++
++#define MIX_DEVELOPE                /* xby/shuai: Mix mode developement */
++#define MIX_EXT
++//#define DEBUG_MIX_DEVELOPE
++#define METADATA_DEVELOPE           /* xby: metadata enc/dec */
++#define METADATA_EXT                /* mxb/xby: ADM+ext metadata */
++//#define DEBUG_META
++
++#define MC_ENABLE                   /* wangzhi */
++#define MC_LFE_PROC                 /* wangzhi, clean LFE channel HF spectrum in both encoder/decoder */
++#define MC_TUNING                   /* wangzhi, adjust bwe band config and bwe bitrate index */
++#define MC_ALLOC_BITS_LIMIT         /* wangzhi, make sure the actual allocated num bits is below limit (256kbps/ch) */
++
++#define CRC_CHECK                   /* xby: CRC calculation, bs writing and check */
++
++#define AVS3_HOA_TUNING             /* shuai: AVS3 HOA tuning */
++#define AVS3_HOA_VL_SELECTION 
++#define AVS3_HOA_BWE                /* shuai: AVS3 HOA BWE tuning */
++
++#define BWE_TUNING                  /* xby: bwe config tuning */
++
++#define AVS3_EXTENSION_WAV_READ     /* shuai: bug fixed for wav header with extension RIFF sub-chunk. */
++
++#define BS_HEADER_COMPAT            /* xby: AVS2P3 compatible bs header definition */
++
++#define AVS3_HOA_BUG_FIXED          /* shuai: AVS3 HOA bug fixed */
++
++#define BITRATE_EXT                 /* xby: extention of bitrate table */
++
++#define MCR_INTEGRATE               /* xby: MCR for low bitrate stereo coding */
++
++#define AVS3_HOA_FULL_SUPPORT       /* shuai: support FOA to HOA3 */
++#define HOA_BUGFIX
++#define HOA_BUGFIX_UPMIX
++
++#define BRTABLE_ALIGN               /* xby: Align bitrate table with WD, for mc 5.1 and mono bwe config */
++
++#define SUPPORT_MORE_FS             /* xby: support sample rate other than 48kHz */
++#define SUPPORT_24BIT_INPUT         /* shuai: support 24bit wav file input */
++
++#define BUGFIX_FOA_RELEASE          /* shuai: bugfix for FOA release crash */
++
++#define BITRATE_EST                 /* ljw/xby: bitrate estimate for RC */
++
++#define SUPPORT_NNTYPE_LC           /* xby/ljw: add nn type to bitstream, integrate LC profile */
++
++#define SUPPORT_HIGH_BR_MIX         /* xby: support higher bitrate for mix mode, exceeding bitsPerFrame short range */
++
++#define BUGFIX_METADATA             /* wangzhi, metadata quantization at encoder side */
++#define BUGFIX_METADATA_MXB         /* mxb: metadata quantization and coding bugfix */
++#define METADATA_UPDATE             /* wangzhi, update dynamic meta */
++
++#define BUGFIX_LOCAL_SYNTH          /* xby: fix NF param quantization bug, found in local synth, NBE */
++#define BUGFIX_MC_16CH              /* wangzhi: fix MC 16ch crash bug in release mode */
++
++#define IMPR_MIX_BIT_ALLOC          /* wangzhi: improvements on mix/mc mode bit allocation */
++#define SWITCH_MIX_BITALLOC_MODE    /* wangzhi: for production and standard bit allocation mode, on for production */
++#define ONLY_PAIR_ILD               /* wangzhi: use pair ild only in mcac */
++
++#define MC_ILD_CBQUANT              /* Quantize MC ild using codebook */
++#define PAIR_INFOR_ORDER            /* wangzhi: MC format, reorder pair info in bs */
++
++#define HOA_ILD_CBQUANT             /* Quantize HOA ild using codebook */
++
++#endif
++  
+\ No newline at end of file
+diff --git a/libavcodec/avs3_stat_com.h b/libavcodec/avs3_stat_com.h
+new file mode 100644
+index 0000000..47b886f
+--- /dev/null
++++ b/libavcodec/avs3_stat_com.h
+@@ -0,0 +1,496 @@
++#ifndef AVS3_STAT_COM_H
++#define AVS3_STAT_COM_H
++
++#include <stdint.h>
++
++#include "avs3_options.h"
++#include "avs3_cnst_com.h"
++
++typedef struct avs3_wav_header_structure {
++
++    int8_t chunkID[4]; 
++    int32_t riffSize; 
++    int8_t format[4]; 
++    int8_t subchunkID[4]; 
++    int32_t subchunkSize; 
++    uint16_t audioFormat;
++    uint16_t numChannels;
++    int32_t sampleRate;
++    int32_t byteRate;
++    uint16_t blockAlign;
++    uint16_t bitDepth;
++    int8_t dataID[4];
++    int32_t dataSize;
++} AVS3_WAVE_HEADER_DATA, *AVS3_WAVE_HEADER_DATA_HANDLE;
++
++#ifdef AVS3_EXTENSION_WAV_READ
++typedef struct avs3_wav_chunk_structure {
++
++    int8_t chunkID[4];
++    int32_t chunkSize;
++
++} AVS3_WAVE_CHUNK_DATA, *AVS3_WAVE_CHUNK_DATA_HANDLE;
++#endif
++
++#ifdef BS_HEADER_COMPAT
++// channel config table
++// for mono/stereo/mc/hoa
++typedef enum _ChannelNumConfig {
++    CHANNEL_CONFIG_MONO = 0,
++    CHANNEL_CONFIG_STEREO = 1,
++    CHANNEL_CONFIG_MC_5_1,
++    CHANNEL_CONFIG_MC_7_1,
++    CHANNEL_CONFIG_MC_10_2,
++    CHANNEL_CONFIG_MC_22_2,
++    CHANNEL_CONFIG_MC_4_0,
++    CHANNEL_CONFIG_MC_5_1_2,
++    CHANNEL_CONFIG_MC_5_1_4,
++    CHANNEL_CONFIG_MC_7_1_2,
++    CHANNEL_CONFIG_MC_7_1_4,
++    CHANNEL_CONFIG_HOA_ORDER1,
++    CHANNEL_CONFIG_HOA_ORDER2,
++    CHANNEL_CONFIG_HOA_ORDER3,
++    CHANNEL_CONFIG_UNKNOWN
++}ChannelNumConfig;
++
++/* Codec bitrate config struct */
++typedef struct CodecBitrateConfigStructure
++{
++    ChannelNumConfig channelNumConfig;
++    const int32_t *bitrateTable;
++}CodecBitrateConfig;
++
++/* MC channel config table */
++/* Cmd line, ChannelNumConfig and numChannels mapping */
++typedef struct McChannelConfigStructure
++{
++    const char mcCmdString[10];
++    ChannelNumConfig channelNumConfig;
++    const int16_t numChannels;
++}McChanelConfig;
++#endif
++
++#ifdef SUPPORT_NNTYPE_LC
++// Neural network model type configuration
++typedef enum _NnTypeConfig {
++    NN_TYPE_DEFAULT_MAIN = 0,
++    NN_TYPE_DEFAULT_LC
++}NnTypeConfig;
++#endif
++
++typedef struct avs3_core_data_structrue
++{
++    float longWindow[BLOCK_LEN_LONG];
++    float shortWindow[BLOCK_LEN_SHORT];
++
++    short overlapShortSize;
++    short overlapLongSize;
++    short overlapPaddingSize;
++
++} AVS3_CORE_CONFIG_DATA, *AVS3_CORE_CONFIG_DATA_HANDLE;
++
++#ifdef AVS3_HOA_TUNING
++typedef struct avs3_hoa_group_configure
++{
++    long bitrate;
++    short spatialAnalysis;
++    short nGroups;
++    short dmxGroup[MAX_HOA_DMX_GROUPS];
++    short coreBwidth[MAX_HOA_DMX_GROUPS];
++    float bitsRatio[MAX_HOA_DMX_GROUPS];
++    float maxBitsRatio;
++    short groupBwe[MAX_HOA_DMX_GROUPS];
++
++} HOA_GROUP_CONFIG;
++#endif
++
++typedef struct avs3_hoa_config_data_struct
++{
++    /* core information. */
++    long totalBitrate;
++    short frameLength;
++
++    /* HOA configure */
++    short order;
++    short nTotalChansInput;
++    short nTotalChansTransport;
++    short nTotalForeChans;
++    short nTotalResChans;
++    short maxCodeLines;
++    short spatialAnalysis;
++
++    /* channel group */
++    short nTotalChanGroups;
++    short groupChans[MAX_HOA_DMX_GROUPS];
++    short groupCodeLines[MAX_HOA_DMX_GROUPS];
++    float groupBitsRatio[MAX_HOA_DMX_GROUPS];
++    short groupIndexBits[MAX_HOA_DMX_GROUPS];
++
++    float maxDirecChanBitsRatio;
++
++    /* channel offset for FOA/HOA */
++    short groupChOffset[MAX_HOA_DMX_GROUPS + 1];
++
++    /* BWE configure for group */
++    short groupBwe[MAX_HOA_DMX_GROUPS];
++
++    short overlapSize;
++    float hoaWindow[HOA_OVERLAP_SIZE];
++
++#ifdef AVS3_HOA_FULL_SUPPORT
++    short innerFormat;
++#endif
++
++}AVS3_HOA_CONFIG_DATA,*AVS3_HOA_CONFIG_DATA_HANDLE;
++
++
++#ifdef MC_ENABLE
++
++/* MCAC PAIR ILD MODE */
++typedef enum {
++    PAIR_ILD_MODE = 0,          /* the paired two channels with the same ILD energy, different pairs have different ILD energies */
++    ALL_ILD_MODE = 1            /* all paired channels with the same ILD energy */
++} McIldMode;
++
++/* MCAC coupling sort struct */
++typedef struct {
++    short ch1;          /* first channel  */
++    short ch2;          /* second channel */
++    float xcorr;        /* corrletion coeffient between ch1 and ch2 */
++} McacSort;
++
++typedef struct avs3_mc_pair_data_structure
++{
++    short ch1;
++    short ch2;
++} AVS3_MC_PAIR_DATA, *AVS3_MC_PAIR_DATA_HANDLE;
++
++/* AVS3 MC DEC structure */
++typedef struct avs3_mc_dec_data_structure
++{
++    float* mcSpectrum[MAX_CHANNELS];
++    short mcSideBits;
++
++    short channelNum;                                       // channel num
++    short coupleChNum;                                      // channel num without LFE
++#ifdef IMPR_MIX_BIT_ALLOC
++    short isMixed;                                          // 1 for bed+obj or pure obj, 0 for only sound bed
++    short objNum;                                           // object number
++    short hasSilFlag;                                       // set to 0 if no silence frame in all channels
++    short silFlag[MAX_CHANNELS];                            // silFlag for each channel
++#endif
++    short lfeChIdx;                                         // LFE channel idx
++    short lfeExist;                                         // if have LFE channel
++    short lfeBytes;                                         // LFE allocated bytes per frame
++    unsigned short mcIld[MAX_CHANNELS];                     // ILD parameter, bs used
++#ifndef MC_ILD_CBQUANT
++    short scaleFlag[MAX_CHANNELS];                          // ILD parameter, bs used
++#endif
++    short pairCnt;                                          // pairing num, bs used
++    short bitsPairIndex;                                    // bits needed to code channel pair index, depends on number of active channels
++    AVS3_MC_PAIR_DATA hPair[MAX_CHANNELS / 2];              // pairing structure , bs use index
++
++}AVS3_MC_DEC_DATA, *AVS3_MC_DEC_HANDLE;
++
++#endif
++
++
++#ifdef NEURAL_QC
++
++// Quantizer structure
++typedef struct QuantizerStructure {
++    int16_t numChannels;
++    float *quantileMedian;
++}QuantizerStruct, *QuantizerHandle;
++
++// Range coder config
++typedef struct RangeCoderConfigStructure {
++    uint16_t numCdfs;                           // number of CDFs
++    uint16_t *cdfLength;                        // CDF length vector, size: numCdfs
++    int16_t  *offset;                           // offset for each cdf to map input data to [0, cdfLength-2]
++    uint32_t **quantizedCdf;                    // quantized CDF table, size: numCdfs * maxCdfLength
++    uint16_t precision;                         // precision of CDF table in bits, range (0, 16]
++    uint16_t overflowWidth;                     // number of bits for each section of overflow coding
++}RangeCoderConfigStruct, *RangeCoderConfigHandle;
++
++// Range encoder state
++typedef struct RangeEncoderStateStructure {
++    uint32_t base;
++    uint32_t sizeMinusOne;
++    uint64_t delay;
++}RangeEncoderStateStruct, *RangeEncoderStateHandle;
++
++// Range decoder state
++typedef struct RangeDecoderStateStructure {
++    uint32_t base;
++    uint32_t sizeMinusOne;
++    uint32_t value;
++}RangeDecoderStateStruct, *RangeDecoderStateHandle;
++
++// model type definition
++typedef enum _TypeModel {
++    VAE,
++    HYPER
++}TypeModel;
++
++// type of activation functions
++typedef enum _TypeActFunc {
++    RELU = 0,
++    LINEAR,
++    SIGMOID,
++    TANH,
++    GDN,
++    IGDN,
++    DN,
++    IDN
++}TypeActFunc;
++
++// type of padding before cnn
++typedef enum _TypePadding {
++    SAME = 0,
++    VALID
++}TypePadding;
++
++// gdn params structure
++typedef struct GdnActFuncStructure {
++
++    float *beta;
++    float **gamma;
++
++}GdnActFuncStruct, *GdnActFuncHandle;
++
++// cnn layer structure for 1D
++typedef struct CnnLayerStructure {
++
++    int16_t isTranspose;                // flag for transpose convolution, 1 for transpose
++
++    int16_t numChannelsIn;              // number of input channels
++    int16_t numChannelsOut;             // number of output channels
++    int16_t kernelSize;                 // kernel size
++    int16_t useBias;                    // flag for bias usage, 1 for use
++    int16_t stride;                     // stride for conv, downsample for conv, upsample for conv_transpose
++    TypePadding padding;                // padding type
++
++    float ***kernel;                    // kernel, size for encoder: kernelSize * numChannelsIn * numChannelsOut
++                                        // size for decoder: kernelSize * numChannelsOut * numChannelsIn
++    float *bias;                        // bias, size: numChannelsOut
++
++    TypeActFunc activationFunc;         // type of activation function
++
++    GdnActFuncHandle gdnActFuncParam;     // parameters for GDN/IGDN act functions
++
++    int16_t featDimIn;                  // dimension of input feature
++    int16_t featDimOut;                 // dimension of output feature
++    float **featOut;                    // output feature buffer, size: featDimOut * numChannelsOut
++
++    // buffer for runtime
++    float **featureInterPolated;        // interpolated feature, only for conv1D transpose, size: featDimIn * stride
++    float **featurePadded;              // padded feature
++                                        //   conv1D           size: (featDimIn + paddingSize) * numChannelsIn
++                                        //   conv1D transpose size: (featDimIn * stride + paddingSize) * numChannelsIn
++    float **featureCol;                 // columned feature
++                                        //   conv1D           size: (featDimIn / stride) * (kernelSize * numChannelsIn)
++                                        //   conv1D transpose size: (featDimIn * stride) * (kernelSize * numChannelsIn)
++    float **kernelCol;                  // columned kernel
++                                        //   conv1D           size: (kernelSize * numChannelsIn) * numChannelsOut
++                                        //   conv1D transpose size: (kernelSize * numChannelsIn) * numChannelsOut
++
++}CnnStruct, *CnnStructHandle;
++
++// model structure, now for pure cnn layers
++// could be used for both encoder and decoder
++typedef struct ModelStructure {
++    int16_t numLayers;
++
++    CnnStructHandle cnnLayers[MAX_LAYERS];
++}ModelStruct, *ModelStructHandle;
++
++// top level structure for neural based QC
++typedef struct NeuralCodecStructure {
++
++    int16_t numLinesEncode;                         // number of input feature
++    int16_t numLatentEncode;                        // dim of latent params
++    int16_t numLatentChannels;                      // number of channels for latent params
++
++    // Encoder handle
++    ModelStructHandle encoderHandle;
++
++    // Decoder handle
++    ModelStructHandle decoderHandle;
++
++    // Quantizer handle
++    QuantizerHandle quantizerHandle;
++
++    // RC handle
++    RangeCoderConfigHandle rangeCoderConfig;        // RC config
++
++    // Context scale, only for hyper-prior now
++    int16_t numContextScale;
++    float *contextScale;
++}NeuralCodecStruct, *NeuralCodecHandle;
++
++// neural based QC data structure, for each channel
++typedef struct NeuralQcDataStructure {
++
++    uint8_t baseBitstream[MAX_QC_BS_LENGTH];
++    int16_t baseNumBytes;
++
++    uint8_t contextBitstream[MAX_QC_BS_LENGTH];
++    int16_t contextNumBytes;
++
++    float featureScale;
++    int16_t isFeatAmplified;
++    int16_t scaleQIdx;
++
++    float nfParam[N_GROUP_SHORT_WIN];
++    int16_t nfParamQIdx[N_GROUP_SHORT_WIN];
++}NeuralQcData;
++
++#endif
++
++#ifdef TD_SHAPING
++// TNS structures
++// filter type
++typedef enum
++{
++    TNS_FILTER_SYNTHESIS = 0,
++    TNS_FILTER_ANALYSIS = 1
++} TnsFilterType;
++
++// tns filter param
++typedef struct TnsFilterStructure
++{
++    short order;                            // tns filter order
++    short coefIndex[TNS_MAX_FILTER_ORDER];  // quantized tns filter coeff (parcor)
++} TnsFilter;
++
++// tns bitstream param
++typedef struct TnsBitstreamStructure
++{
++    short enable;                                               // tns enable flag
++    short order;                                                // tns filter order
++    short parcorNbits[TNS_MAX_FILTER_ORDER];                    // nbits for each parcor order
++    unsigned short parcorHuffCode[TNS_MAX_FILTER_ORDER];        // code for each parcor order
++} TnsBsParam;
++
++// tns detector
++typedef struct TnsDetectorStructure
++{
++    float predictionGain;                   // tns prediction gain
++    float avgSqrCoef;                       // average squared parcor coeff
++} TnsDetector;
++
++// tns data
++typedef struct
++{
++    TnsDetector tnsDetector[TNS_MAX_FILTER_NUM];        // tns detectors
++    TnsFilter filter[TNS_MAX_FILTER_NUM];               // tns filters
++    TnsBsParam bsParam[TNS_MAX_FILTER_NUM];             // tns bitstream parameters
++} TnsData;
++
++// huffman codes
++typedef struct
++{
++    unsigned char value;
++    unsigned short code;
++    unsigned char nBits;
++} TnsHuffman;
++
++#endif
++
++#ifdef BWE_DEVELOPE
++
++typedef enum _BweRateIndex {
++    BWE_BITRATE_FB_MONO_32K = 0,
++    BWE_BITRATE_FB_MONO_48K,
++    BWE_BITRATE_FB_MONO_64K,
++    BWE_BITRATE_FB_MONO_96K,
++    BWE_BITRATE_FB_STEREO_48K,
++    BWE_BITRATE_FB_STEREO_64K,
++    BWE_BITRATE_FB_STEREO_96K,
++    BWE_BITRATE_FB_STEREO_128K,
++#ifdef BWE_TUNING
++    BWE_BITRATE_FB_MC_CPE_48K,
++    BWE_BITRATE_FB_MC_CPE_64K,
++    BWE_BITRATE_FB_MC_CPE_96K,
++    BWE_BITRATE_FB_MC_CPE_128K,
++#endif
++
++#ifdef AVS3_HOA_BWE
++#ifdef AVS3_HOA_FULL_SUPPORT
++    BWE_BITRATE_FB_HOA_ELOW,
++    BWE_BITRATE_FB_HOA_LOW,
++    BWE_BITRATE_FB_HOA_MIDDLE,
++    BWE_BITRATE_FB_HOA_HIGH,
++#else
++    BWE_BITRATE_HOA_256K,
++    BWE_BITRATE_HOA_384K,
++    BWE_BITRATE_HOA_512K,
++    BWE_BITRATE_HOA_768K,
++    BWE_BITRATE_HOA_896K,
++#endif
++#endif
++
++    BWE_BITRATE_FB_UNKNOWN
++}BweRateIndex;
++
++typedef enum _BweWhiteningLevel {
++    BWE_WHITENING_OFF = 0,
++    BWE_WHITENING_MID = 1,
++    BWE_WHITENING_HIGH = 2
++}BweWhiteningLevel;
++
++// bwe config structure
++typedef struct BweConfigStructure {
++
++    int16_t numTiles;                           // number of tiles for bwe
++    int16_t numSfb;                             // number of sfbs for bwe
++
++    int16_t bweStartLine;                       // start bin index of bwe
++    int16_t bweStopLine;                        // stop bin index of bwe
++
++    int16_t targetTiles[MAX_NUM_TILE + 1];      // target tile division
++    int16_t srcTiles[MAX_NUM_TILE];             // source tile start line
++    int16_t sfbTable[MAX_NUM_SFB_BWE + 1];      // SFB division
++    int16_t sfbTileWrap[MAX_NUM_TILE + 1];      // sfb-tile ralation
++
++}BweConfigData, *BweConfigHandle;
++
++/* BWE decoder side data structure */
++typedef struct BweDecDataStructure {
++
++    float sfbEnvelope[MAX_NUM_SFB_BWE];         // quantized sfb envelope
++    int16_t sfbEnvQIdx[MAX_NUM_SFB_BWE];        // sfb envelope quantization index
++    int16_t whiteningLevel[MAX_NUM_TILE];       // tile whitening level
++
++    float bweSpectrum[BLOCK_LEN_LONG];          // buffer of whitened spectrum
++
++}BweDecData, *BweDecDataHandle;
++#endif
++
++#ifdef MCR_INTEGRATE
++/* MCR config structure */
++typedef struct mcr_config_structure {
++
++    // 2 for long/short window
++    int16_t numSfb[MCR_NUM_CONFIG];                      // num sfbs
++    int16_t vqVecNum[MCR_NUM_CONFIG];                    // num of subvectors for vq
++    int16_t vqVecDim[MCR_NUM_CONFIG];                    // dim of subvectors for vq
++    int16_t vqNumBits[MCR_NUM_CONFIG];                   // number of vq bits for each subvector
++    int16_t vqCbSize[MCR_NUM_CONFIG];                    // vq codebook size
++    const float *vqCodebook[MCR_NUM_CONFIG];             // vq codebook pointers
++
++}MCR_CONFIG, *MCR_CONFIG_HANDLE;
++
++/* MCR data structure */
++typedef struct mcr_data_structure {
++
++    // 2 for even/odd spectrum
++    // 0 for even, 1 for odd
++    float theta[MCR_NUM_SUBSPEC][MCR_NUM_SFB_FB];             // mcr angle
++    int16_t vqIdx[MCR_NUM_SUBSPEC][MCR_NUM_SUBVEC];           // vq idx for mcr angle
++
++}MCR_DATA, *MCR_DATA_HANDLE;
++#endif
++
++#endif // AVS3_STAT_COM_H
+diff --git a/libavcodec/avs3_stat_dec.h b/libavcodec/avs3_stat_dec.h
+new file mode 100644
+index 0000000..ceda0d2
+--- /dev/null
++++ b/libavcodec/avs3_stat_dec.h
+@@ -0,0 +1,203 @@
++#ifndef AVS3_STAT_DEC_H
++#define AVS3_STAT_DEC_H
++#include <stdio.h>
++#include "avs3_options.h"
++#include "avs3_cnst_com.h"
++#include "avs3_stat_com.h"
++
++#ifdef METADATA_EXT
++#include "avs3_stat_meta.h"
++#endif
++
++/* bitstream buffer */
++typedef struct avs3_dec_bitstream_structure 
++{
++    uint8_t bitstream[MAX_BS_BYTES];
++    uint32_t nextBitPos;
++
++}AVS3_BSTEREAM_DEC_DATA, *AVS3_BSTEREAM_DATA_DEC_HANDLE;
++
++#ifdef METADATA_EXT
++typedef struct Avs3MetaDataDecStructure {
++    Avs3MetaData  avs3MetaData;
++}Avs3DecMetadata, *Avs3DecMetadataHandle;
++#endif
++
++typedef struct avs3_hoa_dec_structure 
++{
++    float decHoaDelayBuffer[MAX_HOA_CHANNELS][HOA_LEN_FRAME48k + HOA_LEN_FRAME48k];
++    float decSpecturm[MAX_HOA_CHANNELS][HOA_LEN_FRAME48k];
++    float decSynthBuffer[MAX_HOA_CHANNELS][HOA_OVERLAP_SIZE];
++    float* decSignalInput[MAX_HOA_CHANNELS];
++    
++    short basisIdx[MAX_HOA_BASIS];
++    short delayBasisIdx[HOA_DELAY_BASIS][MAX_HOA_BASIS];
++
++    short bitsRatio[MAX_HOA_DMX_GROUPS][MAX_HOA_DMX_CHANNELS];
++    short groupILD[MAX_HOA_DMX_CHANNELS];
++#ifndef HOA_ILD_CBQUANT
++    short flagNrg[MAX_HOA_DMX_CHANNELS];
++#endif
++    short chIdx[MAX_HOA_DMX_GROUPS][MAX_HOA_DMX_CHANNELS / 2];
++    short pairIdx[MAX_HOA_DMX_GROUPS];
++    short lastPairIdx[MAX_HOA_DMX_GROUPS];
++    short groupBitsRatio[MAX_HOA_DMX_GROUPS];
++
++#ifdef AVS3_HOA_BUG_FIXED
++    short dmxMode[MAX_HOA_DMX_GROUPS][MAX_HOA_DMX_CHANNELS / 2];
++    short sfbMask[MAX_HOA_DMX_GROUPS][MAX_HOA_DMX_CHANNELS / 2][N_SFB_HOA_LBR];
++#endif
++
++#ifdef AVS3_HOA_FULL_SUPPORT
++    short numVL;
++    short sceneType;
++#else
++    short numVote;
++#endif
++
++    AVS3_HOA_CONFIG_DATA_HANDLE hHoaConfig;
++
++}AVS3_HOA_DEC_DATA, *AVS3_HOA_DEC_DATA_HANDLE;
++
++typedef struct avs3_dec_core_structure
++{
++    /* frame length */
++    short frameLength;
++
++    float synthBuffer[MAX_OVL_SIZE];
++
++    /* original spectrum */
++    float origSpectrum[FRAME_LEN];
++
++    /* transform type */
++    short transformType;
++
++    /* Mdct grouping info */
++    short numGroups;
++    short groupIndicator[NUM_BLOCKS];
++
++#ifdef FD_SHAPING
++    /* FD spectrum shaping */
++    short lsfVqIndex[LSF_CB_NUM_HBR];           // lsf VQ indices
++    short lsfLbrFlag;                           // low bitrate index for lsf VQ
++#endif
++
++#ifdef TD_SHAPING
++    /* TNS handle */
++    TnsData tnsData;
++#endif
++
++#ifdef BWE_DEVELOPE
++    /* BWE */
++    int16_t bwePresent;                     // bwe present flag
++    BweConfigData bweConfig;                // bwe config info
++    BweDecData bweDecData;                  // bwe encoding data
++#endif
++
++    NeuralQcData neuralQcData;
++
++    AVS3_CORE_CONFIG_DATA_HANDLE hCoreConfig;
++
++}AVS3_DEC_CORE_DATA, *AVS3_DEC_CORE_HANDLE;
++
++/* AVS3 MDCT Stereo structure */
++typedef struct avs3_stereo_dec_data_structure
++{
++    float* mdctSpectrum[STEREO_CHANNELS];
++    short isMS;
++    short bitsRatio;
++    short ILD;
++
++#ifdef MCR_INTEGRATE
++    // for mcr mode in low bitrate
++    int16_t useMcr;
++    MCR_CONFIG mcrConfig;
++    MCR_DATA mcrData;
++#endif
++
++}AVS3_STEREO_DEC_DATA, *AVS3_STEREO_DEC_HANDLE;
++
++#ifdef MONO_INTEGRATE
++/* AVS3 MONO structure */
++typedef struct avs3_mono_dec_data_structure
++{
++    float* mdctSpectrum;
++
++}AVS3_MONO_DEC_DATA, *AVS3_MONO_DEC_HANDLE;
++#endif
++
++typedef struct avs3_main_decoder_structure
++{
++    short initFrame;
++
++    long  outputFs;
++    short bitDepth;                                 // bit depth or resolution of audio signal, 16/24
++    long  totalBitrate;
++    long  lastTotalBrate;
++#ifdef BS_HEADER_COMPAT
++    ChannelNumConfig channelNumConfig;              // channel number config, for bitrate table selection
++#endif
++    short numChansOutput;
++#ifdef MIX_DEVELOPE
++    short numObjsOutput;                            // number of input object channels, only for mix mode
++#ifdef MIX_EXT
++    long bitratePerObj;                             // bitrate for each obj
++    long bitrateBedMc;                              // bitrate for mc sound bed
++    short soundBedType;                             // type of sound bed, 0 for none (only objs), 1 for mc or hoa
++    short isMixedContent;                           // flag for mixed content, i.e. with objects
++    short hasLfe;                                   // LFE flag, for mixed content: pure obj or stereo soundbed, no LFE
++#endif
++#endif
++    short avs3CodecFormat;
++    short avs3CodecCore;
++    short bwidth;
++    short frameLength;
++#ifndef SUPPORT_HIGH_BR_MIX
++    short bitsPerFrame;
++#else
++    int32_t bitsPerFrame;
++#endif
++
++#ifdef SUPPORT_NNTYPE_LC
++    NnTypeConfig nnTypeConfig;                      // neural network model type config
++#endif
++
++    /* Neural QC model type and handles */
++    TypeModel modelType;
++    NeuralCodecHandle baseCodecSt;
++    NeuralCodecHandle contextCodecSt;
++
++    /* Bitstream buffer */
++    AVS3_BSTEREAM_DATA_DEC_HANDLE hBitstream;
++
++    /* HOA */
++    AVS3_HOA_DEC_DATA_HANDLE hDecHoa;
++
++#ifdef MC_ENABLE
++    /* Mc */
++    AVS3_MC_DEC_HANDLE hMcDec;
++#endif
++
++    /* Stereo */
++    AVS3_STEREO_DEC_HANDLE hDecStereo;
++
++#ifdef MONO_INTEGRATE
++    /* Mono */
++    AVS3_MONO_DEC_HANDLE hDecMono;
++#endif
++
++    /* Decoder core */
++    AVS3_DEC_CORE_HANDLE hDecCore[MAX_CHANNELS];
++
++#ifdef METADATA_EXT
++    /* Metadata */
++    Avs3DecMetadataHandle hMetadataDec;
++#endif
++
++	int bInited;
++	FILE* fModel;
++	int32_t bitsHeader;
++
++}AVS3Decoder, *AVS3DecoderHandle;
++
++#endif
+\ No newline at end of file
+diff --git a/libavcodec/avs3_stat_meta.h b/libavcodec/avs3_stat_meta.h
+new file mode 100644
+index 0000000..637ac83
+--- /dev/null
++++ b/libavcodec/avs3_stat_meta.h
+@@ -0,0 +1,386 @@
++
++#ifndef _AVS3_STAT_META_H_
++#define _AVS3_STAT_META_H_
++
++#include <stdint.h>
++#include "avs3_options.h"
++
++#ifdef METADATA_EXT
++#include "avs3_const_meta.h"
++
++//VREXT
++typedef struct EqEffectStructure {
++    int16_t eqType;
++    float   eqFc;
++    float   eqQ;
++    float   eqGain;
++}EqEffect, *EqEffectHandle;
++
++typedef struct AudioEffectStructure {
++    int16_t hasEQExist;
++    int16_t hasDRCExist;
++    int16_t hasGainExist;
++
++    int16_t effectChain;
++    int16_t numEqband;
++
++    EqEffect eqEffect[16];
++
++    float attackTime;
++    float releaseTime;
++    float threshold;
++    float preGain;
++    float postGain;
++    float ratio;
++    float effectGain;
++}AudioEffect, *AudioEffectHandle;
++
++typedef struct VertexStructure {
++    float x;
++    float y;
++    float z;
++}Vertex, *VertexHandle;
++
++typedef struct SurfaceStructure {
++    int16_t material;
++
++    float absorption[8];
++    float scattering[8];
++
++    int16_t numVertices;
++
++    Vertex vertex[32];
++}Surface, *SurfaceHandle;
++
++typedef struct RenderInfoStructure {
++    int16_t targetDevice;
++    int16_t hrtfType;
++
++    int16_t headphoneType[16];
++
++    AudioEffect audioEffect;
++}RenderInfo, *RenderInfoHandle;
++
++typedef struct AcousticEnvStructure {
++    int16_t hasEarlyReflectionGain;
++    int16_t hasLateReverbGain;
++    int16_t reverbType;
++
++    float earlyReflectionGain;
++    float lateReverbGain;
++
++    int16_t lowFreqProFlag;
++
++    int16_t convolutionReverbType;
++
++    int16_t numSurface;
++
++    Surface surface[8];
++}AcousticEnv, *AcousticEnvHandle;
++
++typedef struct Avs3VrExtMetaDataStructure {
++    int16_t hasAcousticEnv;
++    int16_t hasRenderInfo;
++
++    int16_t ambisonicOrder;
++
++    AcousticEnv acousticEnv;
++    RenderInfo  renderInfo;
++}Avs3VrExtL1MetaData, *Avs3VrExtL1MetaDataHandle;
++
++// ADM
++typedef struct DirectSpeakersPositionStructure {
++
++    float azimuth;
++    float elevation;
++    float distance;
++
++    int16_t screenEdgeLock;
++}DirectSpeakersPosition, *DirectSpeakersPositionHandle;
++
++typedef struct AudioObjectInteractionStructure {
++    int16_t onOffInteract;
++    int16_t gainInteract;
++    int16_t positionInteract;
++
++    // gainInteract
++    int16_t gainUnit;
++    float gainInteractionRange_Min;
++    float gainInteractionRange_Max;
++
++    // positionInteract
++    int16_t cartesian;
++
++    // positionInteract cartesian
++    float interactionRange_Xmin;
++    float interactionRange_Xmax;
++    float interactionRange_Ymin;
++    float interactionRange_Ymax;
++    float interactionRange_Zmin;
++    float interactionRange_Zmax;
++
++    // positionInteract polar
++    float interactionRange_azimuthMin;
++    float interactionRange_azimuthMax;
++    float interactionRange_elevationMin;
++    float interactionRange_elevationMax;
++    float interactionRange_distanceMin;
++    float interactionRange_distanceMax;
++}AudioObjectInteraction, *AudioObjectInteractionHandle;
++
++typedef struct DialogueStructure {
++    int16_t dialogueAttribute;
++    int16_t dialogueType;
++}Dialogue, *DialogueHandle;
++
++typedef struct AudioProgrammeRefScreenStructure {
++    int16_t hasCartesian;
++    int16_t aspectRatio;
++    
++    // polar
++    float Position_azimuth;
++    float Position_elevation;
++    float Position_distance;
++    float polarScreenWidth;
++
++    // cartesian
++    float Position_X;
++    float Position_Y;    
++    float Position_Z;
++    float CartesianScreenWidth;
++}AudioProgrammeRefScreen, *AudioProgrammeRefScreenHandle;
++
++typedef struct LoudnessMetadataStructure {
++    int16_t hasIntegratedLoudness;
++    int16_t hasLoudnessRange;
++    int16_t hasMaxTruePeak;
++    int16_t hasMaxMomentary;
++    int16_t hasMaxShortTerm;
++    int16_t hasDialogueLoudness;
++
++    float integratedLoudness;
++    float loudnessRange;
++    float maxTruePeak;
++    float maxMomentary;
++    float maxShortTerm;
++    float dialogueLoudness;
++}LoudnessMetadata, *LoudnessMetadataHandle;
++
++typedef struct AudioChannelFormatStructure {
++    int16_t channelFormatIdx;
++
++    int16_t hasChannelGain;
++
++    int16_t gainUnit;
++    float channelGain;
++
++    // typeLabel  == 2
++    float MatrixCoef[32];
++
++    // typeLabel  == 1(DirectSpeakers)
++    // packFormatID == 0x3f
++    DirectSpeakersPosition directSpeakersPositionData;
++}AudioChannelFormat, *AudioChannelFormatHandle;
++
++typedef struct AudioPackFormatStructure {
++    int16_t packFormatIdx;
++
++    int16_t hasImportance;
++    int16_t hasChannelReuse;
++
++    int16_t importance;
++
++    int16_t typeLabel;
++    int16_t packFormatID;
++    float   absoluteDistance;
++    
++    // typeLabel==4
++    int16_t normalization;
++    float   nfcRefDist;
++    int16_t screenRef;
++    int16_t hoaOrder;
++
++    // typeLabel==2
++    int16_t numMatrixOutputChannel;
++
++    // for numMatrixOutputChannel
++    DirectSpeakersPosition directSpeakersPositionData[32];
++
++    // hasChannelReuse==0
++    int16_t packFormatStartIdx;
++
++    int16_t numChannels;
++    int16_t  refChannelIdx[32];
++
++    int16_t transChRef[32];
++}AudioPackFormat, *AudioPackFormatHandle;
++
++typedef struct AudioObjectStructure {
++    int16_t objectIdx;
++
++    int16_t hasAudioObjectLanguage;
++    int16_t hasDialogue;
++    int16_t hasImportance;
++    int16_t hasDisableDucking;
++    int16_t hasInteract;
++    int16_t hasGain;
++    int16_t hasHeadLocked;
++    int16_t hasMute;
++
++    int16_t ObjectName[24]; //24*6bit
++
++    int16_t audioObjectLanguage;
++
++    Dialogue dialogueData;
++
++    int16_t importance;
++
++    // hasInteract
++    AudioObjectInteraction audioObjectInteractionData;
++
++    // hasGain
++    int16_t gainUnit;
++    float gain;
++
++    int16_t numPacks;
++
++    int16_t refPackFormatIdx[8];
++}AudioObject, *AudioObjectHandle;
++
++typedef struct AudioContentStructure {
++    int16_t contentIdx;
++
++    int16_t hasAudioContentLanguage;
++    int16_t hasLoudnessMetadata;
++    int16_t hasDialogue;
++    int16_t hasNumComplementaryObjectGroup;
++
++    int16_t  audioContentLanguage;
++    LoudnessMetadata loudnessData;
++
++    Dialogue  dialogueData;
++
++    int16_t numComplementaryObjectGroup;
++    int16_t numComplementaryObject[4];
++
++    int16_t ComplementaryObjectIdx[4][8];
++
++    int16_t numObjects;
++
++    int16_t refObjectIdx[8];
++}AudioContent, *AudioContentHandle;
++
++typedef struct AudioProgrammeStructure {
++    int16_t hasAudioProgrammeLanguage;
++    int16_t hasMaxDuckingDepth;
++    int16_t hasLoudnessMetadata;
++    int16_t hasAudioProgrammeRefScreen;
++
++    int16_t audioProgrammeLanguage;
++
++    float maxDuckingDepth;
++
++    LoudnessMetadata loudnessData;
++
++    AudioProgrammeRefScreen audioProgrammeRefScreenData;
++
++    int16_t numContents;
++
++    int16_t refContentIdx[4]; 
++}AudioProgramme, *AudioProgrammeHandle;
++
++typedef struct Avs3BasicL1Structure {
++    AudioProgramme audioProgrammeMeta;
++
++    int16_t numOfContents;
++    AudioContent audioContentData[4];
++
++    int16_t numOfObjects;
++    AudioObject audioObjectData[8];
++
++    int16_t numOfPacks;
++    AudioPackFormat audioPackFormatData[8];
++
++    int16_t numOfChannels;
++    AudioChannelFormat audioChannelFormatData[32];
++}Avs3BasicL1, *Avs3BasicL1Handle;
++
++typedef struct Avs3MetaDataStaticStructure {
++    int16_t hasVrExt;
++    int16_t basicLevel;
++
++    Avs3BasicL1 avs3BasicL1;
++
++    int16_t vrExtLevel;
++    Avs3VrExtL1MetaData avs3VrExtL1MetaData;
++}Avs3MetaDataStatic, *Avs3MetaDataStaticHandle;
++
++// Dynamic
++typedef struct Avs3DmL2MetaDataStructure {
++    int16_t hasChannelLock;
++    int16_t channelLock;
++    float channelLockMaxDist;
++
++    int16_t hasObjectDivergence;
++    float objDivergence;
++    float objDiverAzimuthRange;
++
++    int16_t hasObjectScreenRef;
++    int16_t objScreenRef;
++
++    int16_t hasScreenEdgeLock;
++    int16_t screenEdgeLock;
++}Avs3DmL2MetaData, *Avs3DmL2MetaDataHandle;
++
++typedef struct Avs3DmL1MetaDataStructure {
++    int16_t cartesian;
++
++#ifdef METADATA_UPDATE
++    int16_t hasObjExtent;
++    int16_t hasObjGain;
++    int16_t hasObjDiffuse;
++    int16_t hasObjImportance;
++#endif
++
++    float objAzimuth;
++    float objElevation;
++    float objDistance;
++    float objWidth;
++    float objHeight;
++    float objDepth;
++
++    float obj_x;
++    float obj_y;
++    float obj_z;
++    float objWidth_x;
++    float objHeight_y;
++    float objDepth_z;
++
++    float gain;
++    float diffuse;
++    int16_t jumpPosition;
++    int16_t importance;
++}Avs3DmL1MetaData, *Avs3DmL1MetaDataHandle;
++
++typedef struct Avs3MetaDataDynamicStructure {
++    int16_t dmLevel;
++    int16_t numDmChans;
++    int16_t muteFlag[32];
++    int16_t transChRef[32];
++
++    Avs3DmL1MetaData avs3DmL1MetaData[32];
++    Avs3DmL2MetaData avs3DmL2MetaData[32];
++}Avs3MetaDataDynamic, *Avs3MetaDataDynamicHandle;
++
++// MasterMeta
++typedef struct Avs3MetaDataStructure {
++    int16_t hasStaticMeta;
++    int16_t hasDynamicMeta;
++
++    Avs3MetaDataStatic avs3MetaDataStatic;
++    Avs3MetaDataDynamic avs3MetaDataDynamic;
++}Avs3MetaData, *Avs3MetaDataHandle;
++
++#endif
++
++#endif
+diff --git a/libavcodec/codec_desc.c b/libavcodec/codec_desc.c
+index d58c3d8..73cd04a 100644
+--- a/libavcodec/codec_desc.c
++++ b/libavcodec/codec_desc.c
+@@ -3433,13 +3433,20 @@ static const AVCodecDescriptor codec_descriptors[] = {
+         .long_name = NULL_IF_CONFIG_SMALL("LC3 (Low Complexity Communication Codec)"),
+         .props     = AV_CODEC_PROP_INTRA_ONLY | AV_CODEC_PROP_LOSSY,
+     },
+     {
+         .id        = AV_CODEC_ID_DRA,
+         .type      = AVMEDIA_TYPE_AUDIO,
+         .name      = "dra",
+         .long_name = NULL_IF_CONFIG_SMALL("dra audio decoder"),
+         .props     = AV_CODEC_PROP_INTRA_ONLY | AV_CODEC_PROP_LOSSY,
+     },
++    {
++        .id        = AV_CODEC_ID_AV3A,
++        .type      = AVMEDIA_TYPE_AUDIO,
++        .name      = "av3a",
++        .long_name = NULL_IF_CONFIG_SMALL("AV3A audio vivid"),
++        .props     = AV_CODEC_PROP_LOSSY,
++    },
+ 
+     /* subtitle codecs */
+     {
+diff --git a/libavcodec/codec_id.h b/libavcodec/codec_id.h
+index 0a8d3be..c3eec4a 100644
+--- a/libavcodec/codec_id.h
++++ b/libavcodec/codec_id.h
+@@ -544,7 +544,8 @@ enum AVCodecID {
+     AV_CODEC_ID_OSQ,
+     AV_CODEC_ID_QOA,
+     AV_CODEC_ID_LC3,
+     AV_CODEC_ID_DRA,
++    AV_CODEC_ID_AV3A,
+ 
+     /* subtitle codecs */
+     AV_CODEC_ID_FIRST_SUBTITLE = 0x17000,          ///< A dummy ID pointing at the start of subtitle codecs.
+diff --git a/libavcodec/libarcdav3a.c b/libavcodec/libarcdav3a.c
+new file mode 100644
+index 0000000..33cfd7f
+--- /dev/null
++++ b/libavcodec/libarcdav3a.c
+@@ -0,0 +1,643 @@
++#include <stdbool.h>
++#include <string.h>
++#include "arcdav3a.h"
++#include "decode.h"
++#include "avcodec.h"
++#include "internal.h"
++#include "codec_internal.h"
++#include "libavutil/channel_layout.h"
++#include "libavutil/mastering_display_metadata.h"
++#include "libavutil/mem.h"
++#include "libavutil/internal.h"
++#if ARCH_AARCH64
++#include <arm_neon.h>
++#elif ARCH_X86
++#include <emmintrin.h>
++#endif
++
++#define MAX_VIVID_SIZE 4096*64 // decode output buffer (256 KB)
++#define MAX_SINT16 32768 // max int16 magnitude
++
++typedef struct AVS3DecoderOutput
++{
++	char *pOutData;
++	unsigned long nlen;	//in/out
++	unsigned long nChannel;
++	unsigned long nSamplerate;
++	unsigned long nBits;
++	unsigned long nChCfg;
++	unsigned long nObjCnt;
++	char *pMeta;	//alloc inside, need free outside
++	unsigned long nMeta;
++}AVS3DecoderOutput;
++
++
++typedef struct Av3aSideData
++{
++    bool BinauralRender;
++}Av3aSideData;
++
++typedef struct arcdav3a_context
++{
++	AVCodecContext*     avctx;
++	int                 eos;
++	AVS3DecoderOutput   out_frame;
++	bool		m_bFirstFrame;
++	Avs3MetaData m_LastMetaData;
++	AVS3DecoderHandle m_hAvs3;
++    
++	char* m_pBuffer;
++	unsigned long m_dwBufferSize;
++	unsigned long m_dwDataLen;
++
++	unsigned long m_dwErrorCounter;
++	int m_nlastChannels;
++	int m_lastChCfg;
++	int m_lastObjcnt;
++	int m_lastMixtype;
++	int m_lastBitrateTotal;
++
++	PFavs3_create_decoder avs3_create_decoder;
++	PFavs3_destroy_decoder avs3_destroy_decoder;
++	PFparse_header parse_header;
++	PFavs3_decode avs3_decode;
++
++    bool        m_bGotMD;
++    void*		m_pRender;
++	float* m_pRenderBuffer;
++	unsigned long m_dwRenderBufferSize;
++	unsigned long m_dwRenderDataLen;
++	PFCreateRenderer  CreateRenderer;
++	PFPutInterleavedAudioBuffer  PutInterleavedAudioBuffer;
++	PFGetBinauralInterleavedAudioBuffer GetBinauralInterleavedAudioBuffer;
++    PFUpdateMetadata  UpdateMetadata;
++	PFSetListenerPosition  SetListenerPosition;
++	PFDestroyRenderer    DestroyRenderer;
++	bool BinaRender;
++} arcdav3a_context;
++
++
++static int  InitRender(AVCodecContext *avctx, AVS3DecoderOutput* pOut)
++{
++	arcdav3a_context *h = avctx->priv_data;
++	h->CreateRenderer  = CreateRenderer;
++	h->PutInterleavedAudioBuffer = PutInterleavedAudioBuffer;
++	h->GetBinauralInterleavedAudioBuffer = GetBinauralInterleavedAudioBuffer;
++	h->UpdateMetadata = UpdateMetadata;
++	h->SetListenerPosition = SetListenerPosition;
++	h->DestroyRenderer = DestroyRenderer;
++
++
++    if (h->CreateRenderer == NULL || h->PutInterleavedAudioBuffer == NULL || 
++		h->GetBinauralInterleavedAudioBuffer == NULL || h->UpdateMetadata == NULL ||
++	    h->SetListenerPosition == NULL || h->DestroyRenderer == NULL)
++    {
++        av_log(avctx, AV_LOG_ERROR, "get avs3 audio decoder api failed\n");
++        return AVERROR(EFAULT);
++    }
++
++	if (!h->m_pRender)
++	{
++		Avs3MetaData metaData = { 0 };
++		//		if (pOut->pMeta && (pOut->nMeta > 0))
++		{
++			memcpy(&metaData, &h->m_LastMetaData, sizeof(metaData));
++		}
++		h->m_pRender = h->CreateRenderer(&metaData, pOut->nSamplerate, 1024);
++		av_log(avctx, AV_LOG_DEBUG, "CreateRenderer h->m_pRender:%p \n", h->m_pRender);
++	}
++	return 0;
++}
++
++static av_cold int arcdav3a_decode_init(AVCodecContext *avctx)
++{
++	av_log(avctx, AV_LOG_DEBUG, "begin arcdav3a_decode_init!\n");
++	arcdav3a_context *h = avctx->priv_data;
++	avctx->sample_fmt = AV_SAMPLE_FMT_S16;//for find_stream_info port to reduce time consuming
++	//avctx->ch_layout  = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
++	h->avs3_create_decoder  = avs3_create_decoder;
++	h->avs3_destroy_decoder = avs3_destroy_decoder;
++	h->parse_header = parse_header;
++	h->avs3_decode = avs3_decode;
++
++    if (h->avs3_create_decoder == NULL || h->avs3_destroy_decoder == NULL || 
++		h->parse_header == NULL || h->avs3_decode == NULL)
++    {
++        av_log(avctx, AV_LOG_ERROR, "get avs3 audio decoder api failed\n");
++        return AVERROR(EFAULT);
++    }
++	if (!h->m_hAvs3)
++		h->m_hAvs3 = h->avs3_create_decoder();
++	
++	h->m_lastChCfg = -1;
++	h->m_lastObjcnt = -1;
++	h->m_lastMixtype = -1;
++	h->m_lastBitrateTotal = -1;
++	h->m_bFirstFrame = true;
++	h->m_dwDataLen = 0;
++	h->m_pBuffer = NULL;
++	h->m_dwBufferSize = 0;
++
++	memset(&h->m_LastMetaData, 0, sizeof(h->m_LastMetaData));
++	memset(&h->out_frame, 0, sizeof(AVS3DecoderOutput));
++	h->out_frame.pOutData = av_malloc(MAX_VIVID_SIZE*sizeof(unsigned char));
++	memset(h->out_frame.pOutData, 0, MAX_VIVID_SIZE*sizeof(unsigned char));
++	h->m_pRender = NULL;
++	h->m_pRenderBuffer = NULL;
++	h->m_bGotMD = false;
++	
++	h->BinaRender = false;
++	av_log(avctx, AV_LOG_DEBUG, "end arcdav3a_decode_init!\n");
++    return 0;
++}
++
++static av_cold void arcdav3a_decode_flush(AVCodecContext *avctx)
++{
++	av_log(avctx, AV_LOG_DEBUG, "begin  arcdav3a_decode_flush!\n");
++	arcdav3a_context *h = avctx->priv_data;
++	if (h->m_hAvs3)
++		h->avs3_destroy_decoder(h->m_hAvs3);
++	av_log(avctx, AV_LOG_DEBUG, "arcdav3a_decode_flush! avs3_destroy_decoder end!\n");
++	h->m_hAvs3 = 0;
++	h->m_hAvs3 = h->avs3_create_decoder();
++	av_log(avctx, AV_LOG_DEBUG, "arcdav3a_decode_flush! avs3_create_decoder end!\n");
++	h->m_bFirstFrame = true;
++	h->m_dwDataLen = 0;
++	h->m_lastChCfg = -1;
++	h->m_lastObjcnt = -1;
++	h->m_lastMixtype = -1;
++	h->m_lastBitrateTotal = -1;
++	av_log(avctx, AV_LOG_DEBUG, "end  arcdav3a_decode_flush!\n");
++}
++
++static int dav3a_decode_frame(AVCodecContext *avctx, const char * pIn, unsigned long lenIn, unsigned long* lenConsumed, AVS3DecoderOutput* pOut)
++{
++	av_log(avctx, AV_LOG_DEBUG, "begin  dav3a_decode_frame!\n");
++	arcdav3a_context *h = avctx->priv_data;
++    int ret = 0;
++	if (!h->m_pBuffer)
++	{
++		h->m_dwBufferSize = lenIn * 2;
++		h->m_pBuffer = av_malloc(h->m_dwBufferSize);
++	}
++	if (h->m_dwDataLen + lenIn > h->m_dwBufferSize)
++	{
++		h->m_dwBufferSize = h->m_dwDataLen + lenIn * 2;
++		char* ptmp = av_realloc(h->m_pBuffer, h->m_dwBufferSize);
++		if (ptmp)
++			h->m_pBuffer = ptmp;
++		else
++		    av_free(h->m_pBuffer);
++	}
++	if (!h->m_pBuffer)
++	{
++		av_log(avctx, AV_LOG_ERROR, "av3a memory error!");
++	}
++
++	memcpy(h->m_pBuffer + h->m_dwDataLen, pIn, lenIn);
++	h->m_dwDataLen += lenIn;
++	*lenConsumed = lenIn;
++
++	//unsigned long outmaxlen = pOut->nlen;
++	pOut->nlen = 0;
++	
++	int pos = 0;
++	int outindex = 0;
++	av_log(avctx, AV_LOG_DEBUG, "begin  audio vivid parse_header!\n");
++	do {
++		int consumed = 0;
++		while ((ret = h->parse_header(h->m_hAvs3, h->m_pBuffer + pos, h->m_dwDataLen - pos, h->m_bFirstFrame, &consumed, NULL)) != AVS3_TRUE)
++		{
++			if (ret == AVS3_DATA_NOT_ENOUGH)
++			{
++				if (pos + consumed < h->m_dwDataLen)
++					pos += consumed;
++				else
++				{
++					pos = h->m_dwDataLen;
++				}
++				break;
++			}
++			//printf("!!!jl: %s, parse_header return:%d, consumed:%d, pos:%d\n", __FUNCTION__, ret, consumed, pos);
++			if(pos + consumed < h->m_dwDataLen)
++				pos += consumed;
++			else
++			{
++				pos = h->m_dwDataLen;
++				ret = AVS3_DATA_NOT_ENOUGH;
++				break;
++			}
++		}
++
++		if (ret != AVS3_TRUE)
++		{
++			av_log(avctx, AV_LOG_DEBUG, "parse_header return:%d, pos(%d), m_dwDataLen(%ld)", ret, pos, h->m_dwDataLen);
++			break;
++		}
++
++        //ret 
++		if (h->m_hAvs3->numObjsOutput > 6)
++		{
++			av_log(avctx, AV_LOG_DEBUG, "!!!jl:Error, numObjsOutput:%d, reset\n", h->m_hAvs3->numObjsOutput);
++			arcdav3a_decode_flush(avctx);
++			outindex = 0;
++			break;
++		}
++
++		if (((h->m_lastChCfg != -1) && (h->m_lastChCfg != h->m_hAvs3->channelNumConfig))
++			|| ((h->m_lastObjcnt != -1) && (h->m_lastObjcnt != h->m_hAvs3->numObjsOutput))
++			|| ( (h->m_lastMixtype != -1) && (h->m_lastMixtype != h->m_hAvs3->isMixedContent))
++			|| ( (h->m_lastBitrateTotal != -1) && (h->m_lastBitrateTotal != h->m_hAvs3->totalBitrate))
++			)
++		{
++			av_log(avctx, AV_LOG_DEBUG, "\n\nconfiguration changed, reset. m_lastChCfg:%d, now:%d, m_lastObjcnt:%d, now:%d,"
++				"m_lastMixtype:%d, now:%d, m_lastBitrateTotal:%d, now:%ld\n\n"
++				, h->m_lastChCfg, h->m_hAvs3->channelNumConfig, h->m_lastObjcnt, h->m_hAvs3->numObjsOutput,
++				h->m_lastMixtype, h->m_hAvs3->isMixedContent, h->m_lastBitrateTotal, h->m_hAvs3->totalBitrate);
++			arcdav3a_decode_flush(avctx);
++			outindex = 0;
++			break;
++		}
++
++		if (pos + consumed < h->m_dwDataLen)
++			pos += consumed;
++		else
++		{
++			pos = h->m_dwDataLen;
++			ret = AVS3_DATA_NOT_ENOUGH;
++			av_log(avctx, AV_LOG_DEBUG, "pos + consumed >= m_dwDataLen\n", pos, consumed, h->m_dwDataLen);
++			break;
++		}
++        //reset end!
++ 
++//		ASLOG_MsgA(5, "%s, m_dwDataLen:%d, m_hAvs3->bitsPerFrame:%d, %d", __FUNCTION__, m_dwDataLen, m_hAvs3->bitsPerFrame, m_hAvs3->bitsPerFrame/8);
++
++		if (h->m_bFirstFrame)
++			h->m_bFirstFrame = false;
++
++		int outlen = 0;
++		av_log(avctx, AV_LOG_DEBUG, "begin  avs3_decode! pos:%d m_dwDataLen:%ld h->m_pBuffer:%p pOut->pOutData:%p\n", pos, h->m_dwDataLen, h->m_pBuffer, pOut->pOutData);
++		ret = h->avs3_decode(h->m_hAvs3, h->m_pBuffer + pos, h->m_dwDataLen - pos, pOut->pOutData + outindex, &outlen, &consumed);
++		pos += consumed;
++
++		if ((ret != AVS3_TRUE) || (outlen <= 0))
++		{
++			h->m_dwErrorCounter++;
++			if (h->m_dwErrorCounter > 50)
++			{
++				av_log(avctx, AV_LOG_DEBUG, "avs3_decode did not output data too many times, reset decoder.");
++				h->m_dwErrorCounter = 0;
++				arcdav3a_decode_flush(avctx);
++				outindex = 0;
++			}
++		}
++		else
++			h->m_dwErrorCounter = 0;
++
++		if (ret != AVS3_TRUE)
++			break;
++
++		h->m_lastChCfg = h->m_hAvs3->channelNumConfig;
++		h->m_lastObjcnt = h->m_hAvs3->numObjsOutput;
++		h->m_lastMixtype = h->m_hAvs3->isMixedContent;
++		h->m_lastBitrateTotal = h->m_hAvs3->totalBitrate;
++
++		if (outlen)
++			outindex += outlen;
++		else
++			break;
++	} while (h->m_dwDataLen > pos);
++
++	if (outindex)
++	{
++		pOut->nlen = outindex;
++		pOut->nBits = 16;// m_hAvs3->bitDepth;
++		pOut->nChannel = h->m_hAvs3->numChansOutput;
++		pOut->nSamplerate = h->m_hAvs3->outputFs;
++		pOut->nChCfg = h->m_hAvs3->channelNumConfig;
++		pOut->nObjCnt = h->m_hAvs3->numObjsOutput;
++		if (h->m_hAvs3->hMetadataDec->avs3MetaData.hasStaticMeta || h->m_hAvs3->hMetadataDec->avs3MetaData.hasDynamicMeta)
++		{
++			pOut->nMeta = sizeof(h->m_hAvs3->hMetadataDec->avs3MetaData);
++			pOut->pMeta = (char*)&h->m_hAvs3->hMetadataDec->avs3MetaData;
++		}
++		else
++		{
++			pOut->nMeta = 0;
++			pOut->pMeta = NULL;
++		}
++		h->m_hAvs3->numObjsOutput = 0;
++	}
++
++	// Adjust input blob 
++	if ( (pos > 0) && (pos < h->m_dwDataLen) )
++	{
++		memmove(h->m_pBuffer, h->m_pBuffer + pos, h->m_dwDataLen - pos);
++		h->m_dwDataLen -= pos;
++	}
++	else if(pos >= h->m_dwDataLen)
++		h->m_dwDataLen = 0;
++
++	return ret;
++}
++
++
++static int RenderPCM(AVCodecContext *avctx, AVS3DecoderOutput* pOut)
++{
++	av_log(avctx, AV_LOG_DEBUG, "begin  RenderPCM!\n");
++	arcdav3a_context *h = avctx->priv_data;
++	int nRet;
++	if(!h->m_pRender){
++		av_log(avctx, AV_LOG_DEBUG, "InitRender!\n");
++		nRet = InitRender(avctx, &h->out_frame);
++		if(nRet < 0)
++            return nRet;
++	}
++
++	if (!pOut || !pOut->pOutData || pOut->nlen <= 0)
++		return -1;
++
++	if (h->m_nlastChannels != pOut->nChannel)
++	{
++		if(h->m_pRenderBuffer)
++		    av_freep(h->m_pRenderBuffer);
++		h->m_dwRenderBufferSize = h->m_dwRenderDataLen = 0;
++		h->m_nlastChannels = pOut->nChannel;
++	}
++
++	int samples = pOut->nlen / (pOut->nChannel * pOut->nBits / 8); // samples per channel
++
++	/* buffer allocation */
++	if (!h->m_pRenderBuffer)
++	{
++		h->m_dwRenderBufferSize = samples * 2; // render buffer length for stereo output
++		h->m_pRenderBuffer = (float*)av_malloc(h->m_dwRenderBufferSize * pOut->nChannel * sizeof(float));
++		h->m_dwRenderDataLen = 0;
++	}
++	if (h->m_dwRenderDataLen + samples > h->m_dwRenderBufferSize)
++	{
++		h->m_dwRenderBufferSize = h->m_dwRenderDataLen + samples * 2;
++		float* tmp = (float*)av_realloc(h->m_pRenderBuffer, h->m_dwRenderBufferSize * pOut->nChannel * sizeof(float));
++		if (tmp)
++			h->m_pRenderBuffer = tmp;
++		else
++			av_freep(h->m_pRenderBuffer);
++	}
++	if (!h->m_pRenderBuffer)
++		return -1;
++    /* end buffer allocation */
++
++	short *src = (short*)pOut->pOutData; // decoder output -> render input
++	for (int i = 0; i < samples*pOut->nChannel; i++)
++	{
++		*(h->m_pRenderBuffer + h->m_dwRenderDataLen * pOut->nChannel + i) = ((float)src[i]) / MAX_SINT16;
++	}
++	h->m_dwRenderDataLen += samples; // samples queued for render
++	Avs3MetaData metaData = { 0 };
++//	if (pOut->pMeta && (pOut->nMeta > 0))
++	{
++//		memcpy(&metaData, pOut->pMeta, min(pOut->nMeta, sizeof(metaData)));
++		memcpy(&metaData, &h->m_LastMetaData, sizeof(h->m_LastMetaData));
++	}
++	float position[3] = { 0, 0, 0 };
++	float front[3] = { 0, 0, 1 };
++	float up[3] = { 0, 1, 0 };
++
++	float outbuf[1024 * 16]; // 16 channels, 1024 samples per channel
++
++	pOut->nChannel = 2; // output stereo
++	pOut->nlen = 0; // reset output length
++	int err = 0;
++	int pos = 0;
++	while (h->m_dwRenderDataLen - pos >= 1024) // render 1024 samples per call
++	{
++		av_log(avctx, AV_LOG_DEBUG, "begin  PutInterleavedAudioBuffer!\n");
++		if (h->PutInterleavedAudioBuffer(h->m_pRender, h->m_pRenderBuffer, 1024, h->m_nlastChannels) != 0)
++		{
++			err = 1;
++			break;
++		}
++//		if (pOut->pMeta && (pOut->nMeta > 0))
++		{
++			av_log(avctx, AV_LOG_DEBUG, "begin  UpdateMetadata!\n");
++			if (h->UpdateMetadata(h->m_pRender, &metaData) != 0)
++			{
++				err = 1;
++				break;
++			}
++		}
++		if (h->SetListenerPosition(h->m_pRender, position, front, up) != 0) {
++			err = 1;
++			break;
++		}
++		av_log(avctx, AV_LOG_DEBUG, "begin  GetBinauralInterleavedAudioBuffer!  %p\n", h->m_pRender);
++		if (h->GetBinauralInterleavedAudioBuffer(h->m_pRender, outbuf, 1024) != 0)
++		{
++			err = 1;
++			break;
++		}
++		av_log(avctx, AV_LOG_DEBUG, "end  GetBinauralInterleavedAudioBuffer!\n");
++		short* dst = (short*)(pOut->pOutData + pOut->nlen);
++		for (int i = 0; i < 1024*pOut->nChannel; i++)
++		{
++			float tmp = outbuf[i] * 32767.0f;
++            if (tmp > 32767.0f) {
++                tmp = 32767.0f;
++            } else if (tmp < -32768.0f) {
++                tmp = -32768.0f;
++            }
++            dst[i] = (short)tmp;
++		}
++		pOut->nlen += 1024 * pOut->nChannel * 2;
++		pos += 1024;
++	}
++
++	if (err)
++	{
++		pOut->nlen = 0;
++		h->m_dwRenderDataLen = 0;
++	}
++	if (h->m_dwRenderDataLen > pos)
++		h->m_dwRenderDataLen -= pos;
++	else
++		h->m_dwRenderDataLen = 0;
++    av_log(avctx, AV_LOG_DEBUG, "end  RenderPCM!\n");
++	return 0;
++}
++
++
++static int arcdav3a_decode_frame(AVCodecContext *avctx, AVFrame *frm, int *got_frame_ptr, AVPacket *avpkt)
++{
++    av_log(avctx, AV_LOG_DEBUG, "begin arcdav3a_receive_frame!\n");
++	arcdav3a_context *h = avctx->priv_data;
++	int ret;
++    *got_frame_ptr = 0;
++	size_t side_data_size;
++    uint8_t *side_data;
++    side_data = av_packet_get_side_data(avpkt, AV_PKT_DATA_AUDIO_VIVID,
++                                                &side_data_size);
++	if(side_data && side_data_size>0){
++											
++        h->BinaRender = false;//((Av3aSideData*)side_data)->BinauralRender == true?true:false;
++		av_log(avctx, AV_LOG_DEBUG, "h->BinaRender=%d\n", h->BinaRender);
++	}
++
++	//static int num =0;
++	//num ++;
++	//FILE* fpin = NULL;
++	// FILE* fpout = NULL;
++	// if (num == 1)
++	// {
++    //     //fpin = fopen("test.av3a", "w");
++	// 	fpout = fopen("/sdcard/test.pcm", "w");
++	// }
++    // else
++	// {
++    //     //fpin = fopen("test.av3a", "a+");
++	// 	fpout = fopen("/sdcard/test.pcm", "a+");
++	// }
++	/*if(avpkt.size > 0 && avpkt.data)
++	{
++		fwrite(avpkt.data, 1, avpkt.size, fpin);
++	}
++	fclose(fpin);*/
++	
++	//unsigned char pbIn[2048] = {0};
++	if (avpkt->size>0)
++	{
++		// if(avpkt.size > 0)
++		//     memcpy(pbIn, avpkt.data, avpkt.size); // dav3a_decode_frame will copy internally
++		char* pbIn = avpkt->data;
++		int size = avpkt->size;
++		while (size > 0)//
++		{
++			unsigned long  lenConsumed = 0;
++			memset(h->out_frame.pOutData, 0, MAX_VIVID_SIZE*sizeof(unsigned char));
++			
++			ret = dav3a_decode_frame(avctx, pbIn, size, &lenConsumed, &h->out_frame);
++			if (ret < 0)
++				return AVERROR(EAGAIN);
++		
++			pbIn += lenConsumed;
++			size -= lenConsumed;
++			//printf("!!!jl: lenConsumed:%d  size=%d h->out_frame.nlen=%d\n", lenConsumed, size, h->out_frame.nlen);
++			
++			if (h->out_frame.pMeta && memcmp(h->out_frame.pMeta, &h->m_LastMetaData, sizeof(h->m_LastMetaData)) != 0)
++			{
++				memcpy(&h->m_LastMetaData, h->out_frame.pMeta, sizeof(h->m_LastMetaData));
++				h->m_bGotMD = true;
++			}
++			if(h->BinaRender && h->m_bGotMD){
++                ret = RenderPCM(avctx, &h->out_frame);
++				if (ret < 0)
++				return AVERROR(EAGAIN);
++			}
++
++
++            /*if(h->out_frame.nlen > 0)
++			{
++				fwrite(h->out_frame.pOutData, 1, h->out_frame.nlen, fpout);
++			}
++			fclose(fpout);*/
++			
++			frm->nb_samples = 1024;
++			frm->sample_rate = h->out_frame.nSamplerate;
++			ChannelNumConfig chconf = (ChannelNumConfig)h->out_frame.nChCfg;
++			av_channel_layout_uninit(&frm->ch_layout);
++			if (h->out_frame.nChannel == 1)
++			    frm->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_MONO;
++			else if (h->out_frame.nChannel == 2)
++			    frm->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_STEREO;
++			else if (chconf == CHANNEL_CONFIG_MC_5_1_4 && h->out_frame.nChannel == 10)
++			    frm->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_5POINT1POINT4_BACK;
++			else if (chconf == CHANNEL_CONFIG_MC_7_1_2 && h->out_frame.nChannel == 10)
++			    frm->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_7POINT1POINT2;
++			else if (chconf == CHANNEL_CONFIG_MC_7_1_4 && h->out_frame.nChannel == 12)
++			    frm->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_7POINT1POINT4_BACK;
++			else if (chconf == CHANNEL_CONFIG_HOA_ORDER3 && h->out_frame.nChannel == 16)
++			    frm->ch_layout = (AVChannelLayout)AV_CHANNEL_LAYOUT_HEXADECAGONAL;
++			else if (chconf == CHANNEL_CONFIG_UNKNOWN)
++			    av_log(avctx, AV_LOG_ERROR, "unknown audio chconf; falling back to default layout\n");
++
++			if (frm->ch_layout.nb_channels == 0) {
++			    av_channel_layout_default(&frm->ch_layout, h->out_frame.nChannel);
++			}
++
++			av_channel_layout_uninit(&avctx->ch_layout);
++			if (av_channel_layout_copy(&avctx->ch_layout, &frm->ch_layout) < 0)
++			    return AVERROR(ENOMEM);
++			avctx->sample_rate = frm->sample_rate;
++
++			frm->format = AV_SAMPLE_FMT_S16;
++			av_log(avctx, AV_LOG_DEBUG, " before ff_get_buffer! h->out_frame.nlen %ld\n", h->out_frame.nlen);
++			ret = ff_get_buffer(avctx, frm, 0);//will copy frm->ch_layout from avctx->ch_layout
++			if (ret < 0){
++				av_log(avctx, AV_LOG_DEBUG, "ff_get_buffer error!\n");
++				return ret;
++			}
++			
++			if(h->out_frame.nlen > 0)
++			{
++				av_log(avctx, AV_LOG_DEBUG, "begin copy buffer!\n");
++				memcpy(frm->data[0], h->out_frame.pOutData, h->out_frame.nlen);
++				av_log(avctx, AV_LOG_DEBUG, "end copy buffer!\n");
++				/*if(fpout)
++				{
++				fwrite(frm->data[0], 1, h->out_frame.nlen, fpout);
++				fclose(fpout); 
++				}*/ 
++				*got_frame_ptr = 1;                                                                                                                                                                                                                                                                                                                                        
++			}
++	    }
++		av_log(avctx, AV_LOG_DEBUG, "av_packet_unref!\n");
++		//av_packet_unref(avpkt);
++		av_log(avctx, AV_LOG_DEBUG, "end av_packet_unref!\n");
++	}
++    //return AVERROR(EAGAIN);
++	return avpkt->size;
++}
++
++static av_cold int arcdav3a_decode_close(AVCodecContext *avctx)
++{
++    av_log(avctx, AV_LOG_DEBUG, "arcdav3a_decode_close begin!\n");
++	arcdav3a_context *h = avctx->priv_data;
++	if(h == NULL)
++	{
++	    av_log(avctx, AV_LOG_DEBUG, "arcdav3a_context is NULL!\n");
++		return 0;
++	}
++	if (h->m_hAvs3)
++		h->avs3_destroy_decoder(h->m_hAvs3);
++	av_log(avctx, AV_LOG_DEBUG, "avs3_destroy_decoder end!\n");
++	if (h->m_pRender)
++        h->DestroyRenderer(h->m_pRender);
++	av_log(avctx, AV_LOG_DEBUG, "DestroyRenderer end!\n");
++	h->m_pRender = NULL;
++    h->m_hAvs3 = NULL;
++	if(h->m_pBuffer)
++	    av_freep(&h->m_pBuffer);
++	av_log(avctx, AV_LOG_DEBUG, "free h->m_pBuffer end!\n");
++	if(h->out_frame.pOutData)
++	    av_freep(&h->out_frame.pOutData);
++	av_log(avctx, AV_LOG_DEBUG, "free out_frame.pOutData end!\n");
++	if(h->m_pRenderBuffer)
++	    av_freep(&h->m_pRenderBuffer);
++	av_log(avctx, AV_LOG_DEBUG, "arcdav3a_decode_close end!\n");
++    return 0;
++}
++ 
++
++const FFCodec ff_libarcdav3a_decoder = 
++{
++    .p.name           = "libarcdav3a",
++    .p.long_name      = NULL_IF_CONFIG_SMALL("AV3a decoder by ArcVideo"),
++    .p.type           = AVMEDIA_TYPE_AUDIO,
++    .p.id             = AV_CODEC_ID_AV3A,
++	.p.capabilities   = AV_CODEC_CAP_CHANNEL_CONF | AV_CODEC_CAP_DR1,
++	.caps_internal    = FF_CODEC_CAP_INIT_CLEANUP,
++	.priv_data_size   = sizeof(arcdav3a_context),
++	FF_CODEC_DECODE_CB(arcdav3a_decode_frame),
++    .init             = arcdav3a_decode_init,
++	.flush            = arcdav3a_decode_flush,
++	.close            = arcdav3a_decode_close,
++};
+diff --git a/libavcodec/packet.c b/libavcodec/packet.c
+index 381001f..c19e1cf 100644
+--- a/libavcodec/packet.c
++++ b/libavcodec/packet.c
+@@ -306,6 +306,7 @@ const char *av_packet_side_data_name(enum AVPacketSideDataType type)
+     case AV_PKT_DATA_IAMF_DEMIXING_INFO_PARAM:   return "IAMF Demixing Info Parameter Data";
+     case AV_PKT_DATA_IAMF_RECON_GAIN_INFO_PARAM: return "IAMF Recon Gain Info Parameter Data";
+     case AV_PKT_DATA_FRAME_CROPPING:             return "Frame Cropping";
++    case AV_PKT_DATA_AUDIO_VIVID:               return "Audio Vivid";
+     case AV_PKT_DATA_LCEVC:                      return "LCEVC NAL data";
+     }
+     return NULL;
+diff --git a/libavcodec/packet.h b/libavcodec/packet.h
+index 0a28010..03d96be 100644
+--- a/libavcodec/packet.h
++++ b/libavcodec/packet.h
+@@ -345,6 +345,11 @@ enum AVPacketSideDataType {
+      */
+     AV_PKT_DATA_LCEVC,
+ 
++    /**
++     * Audio Vivid side data.
++     */
++    AV_PKT_DATA_AUDIO_VIVID,
++
+     /**
+      * The number of side data types.
+      * This is not part of the public API/ABI in the sense that it may
+diff --git a/libavformat/Makefile b/libavformat/Makefile
+index 7ca68a7..f800181 100644
+--- a/libavformat/Makefile
++++ b/libavformat/Makefile
+@@ -145,6 +145,7 @@ OBJS-$(CONFIG_AVS2_DEMUXER)              += avs2dec.o rawdec.o
+ OBJS-$(CONFIG_AVS2_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_AVS3_DEMUXER)              += avs3dec.o rawdec.o
+ OBJS-$(CONFIG_AVS3_MUXER)                += rawenc.o
++OBJS-$(CONFIG_AV3A_MUXER)                += rawenc.o
+ OBJS-$(CONFIG_BETHSOFTVID_DEMUXER)       += bethsoftvid.o
+ OBJS-$(CONFIG_BFI_DEMUXER)               += bfi.o
+ OBJS-$(CONFIG_BINK_DEMUXER)              += bink.o
+diff --git a/libavformat/allformats.c b/libavformat/allformats.c
+index 305fa46..69070fb 100644
+--- a/libavformat/allformats.c
++++ b/libavformat/allformats.c
+@@ -99,6 +99,7 @@ extern const FFInputFormat  ff_avs2_demuxer;
+ extern const FFOutputFormat ff_avs2_muxer;
+ extern const FFInputFormat  ff_avs3_demuxer;
+ extern const FFOutputFormat ff_avs3_muxer;
++extern const FFOutputFormat ff_av3a_muxer;
+ extern const FFInputFormat  ff_bethsoftvid_demuxer;
+ extern const FFInputFormat  ff_bfi_demuxer;
+ extern const FFInputFormat  ff_bintext_demuxer;
+diff --git a/libavformat/isom_tags.c b/libavformat/isom_tags.c
+index 5dd72d5..74a2eab 100644
+--- a/libavformat/isom_tags.c
++++ b/libavformat/isom_tags.c
+@@ -353,6 +353,7 @@ const AVCodecTag ff_codec_movaudio_tags[] = {
+     { AV_CODEC_ID_TRUEHD,          MKTAG('m', 'l', 'p', 'a') }, /* mp4ra.org */
+     { AV_CODEC_ID_OPUS,            MKTAG('O', 'p', 'u', 's') }, /* mp4ra.org */
+     { AV_CODEC_ID_MPEGH_3D_AUDIO,  MKTAG('m', 'h', 'm', '1') }, /* MPEG-H 3D Audio bitstream */
++    { AV_CODEC_ID_AV3A,            MKTAG('a', 'v', '3', 'a') }, /* AV3A Audio Vivid */
+     { AV_CODEC_ID_NONE, 0 },
+ };
+ 
+diff --git a/libavformat/mpegts.c b/libavformat/mpegts.c
+index 86b7c8e..36b5627 100644
+--- a/libavformat/mpegts.c
++++ b/libavformat/mpegts.c
+@@ -819,6 +819,7 @@ static const StreamType ISO_types[] = {
+     { 0xd1, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_DIRAC      },
+     { 0xd2, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_AVS2       },
+     { 0xd4, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_AVS3       },
++    { 0xd5, AVMEDIA_TYPE_AUDIO, AV_CODEC_ID_AV3A       },
+     { 0xea, AVMEDIA_TYPE_VIDEO, AV_CODEC_ID_VC1        },
+     { 0 },
+ };
+diff --git a/libavformat/rawenc.c b/libavformat/rawenc.c
+index cf298d2..6f5c58f 100644
+--- a/libavformat/rawenc.c
++++ b/libavformat/rawenc.c
+@@ -147,6 +147,21 @@ const FFOutputFormat ff_avs3_muxer = {
+ };
+ #endif
+ 
++#if CONFIG_AV3A_MUXER
++const FFOutputFormat ff_av3a_muxer = {
++    .p.name            = "av3a",
++    .p.long_name       = NULL_IF_CONFIG_SMALL("AV3A audio vivid"),
++    .p.extensions      = "av3a",
++    .p.audio_codec     = AV_CODEC_ID_AV3A,
++    .p.video_codec     = AV_CODEC_ID_NONE,
++    .p.subtitle_codec  = AV_CODEC_ID_NONE,
++    .flags_internal    = FF_OFMT_FLAG_MAX_ONE_OF_EACH |
++                         FF_OFMT_FLAG_ONLY_DEFAULT_CODECS,
++    .write_packet      = ff_raw_write_packet,
++    .p.flags           = AVFMT_NOTIMESTAMPS,
++};
++#endif
++
+ 
+ #if CONFIG_CAVSVIDEO_MUXER
+ const FFOutputFormat ff_cavsvideo_muxer = {

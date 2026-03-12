@@ -51,6 +51,7 @@ This script:
 
 - downloads and extracts `ffmpeg-7.1.3`
 - fetches and builds static `uavs3d`
+- builds static AV3A decoder + binaural renderer from the local `Sourcecodeforplayer` checkout (see `AV3A_SOURCE_ROOT`)
 - fetches and builds static `davs2-10bit` when `LICENSE_FLAVOR=gpl`
 - applies the vendored local patches
 - applies `ffmpeg_cavs_dra.patch` as the base AVS / AVS+ / DRA support patch
@@ -212,6 +213,10 @@ Execution order:
   - makes FFmpeg's `libdavs2` wrapper consume the additional AVS2 sequence-display metadata exported by the local `davs2-10bit` patch stack
   - maps AVS2 range / primaries / transfer / matrix values onto FFmpeg `AVCodecContext` and `AVFrame` color fields
   - allows downstream tools such as `ffmpeg`, `ffplay`, `mpv`, and IINA to recognize the basic AVS2 HDR / wide-color signalling correctly
+- `tools/patches/ffmpeg/0005-libarcdav3a-add-av3a-audio-vivid-decoder.patch`
+  - adds the ArcVideo `libarcdav3a` AV3A (Audio Vivid) decoder glue
+  - registers AV3A codec IDs, container tags, and MPEG-TS stream type mappings needed for demuxing and raw muxing
+  - links against the locally built static AVS3 Audio decoder + binaural renderer (no runtime .so/.dylib dependency; model is embedded via `libavs3_common/model.h`)
 
 ## Performance
 
@@ -241,6 +246,9 @@ Useful overrides:
   - overrides the vendored patch root; default is `tools/patches`
 - `DEFAULT_CAVS_DRA_PATCH_PATH`
   - points to a local `ffmpeg_cavs_dra.patch`; if unset, the script fetches it from the upstream repository
+- `AV3A_GIT_URL` / `AV3A_GIT_REF`
+  - git source for AV3A; defaults to `https://github.com/nilaoda/Sourcecodeforplayer`
+  - default ref: `e7d244d29454eb04c968cd98a30587303a9c15f8`
 - `DAVS2_EXTRA_CFLAGS`
   - appends extra `davs2-10bit` compiler flags; on `arm64`, the default is tuned to remain friendly to Apple Silicon vectorization and the vendored NEON patch stack
 - `DAVS2_EXTRA_LDFLAGS`
