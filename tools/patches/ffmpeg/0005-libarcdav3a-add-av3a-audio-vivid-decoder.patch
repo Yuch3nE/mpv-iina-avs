@@ -2008,7 +2008,7 @@ new file mode 100644
 index 0000000..33cfd7f
 --- /dev/null
 +++ b/libavcodec/libarcdav3a.c
-@@ -0,0 +1,643 @@
+@@ -0,0 +1,673 @@
 +#include <stdbool.h>
 +#include <string.h>
 +#include "arcdav3a.h"
@@ -2020,6 +2020,7 @@ index 0000000..33cfd7f
 +#include "libavutil/mastering_display_metadata.h"
 +#include "libavutil/mem.h"
 +#include "libavutil/internal.h"
++#include "libavutil/samplefmt.h"
 +#if ARCH_AARCH64
 +#include <arm_neon.h>
 +#elif ARCH_X86
@@ -2288,6 +2289,13 @@ index 0000000..33cfd7f
 +
 +		int outlen = 0;
 +		av_log(avctx, AV_LOG_DEBUG, "begin  avs3_decode! pos:%d m_dwDataLen:%ld h->m_pBuffer:%p pOut->pOutData:%p\n", pos, h->m_dwDataLen, h->m_pBuffer, pOut->pOutData);
++		if (outindex >= MAX_VIVID_SIZE) {
++			av_log(avctx, AV_LOG_ERROR, "output buffer overflow, reset decoder\n");
++			arcdav3a_decode_flush(avctx);
++			outindex = 0;
++			ret = AVS3_FALSE;
++			break;
++		}
 +		ret = h->avs3_decode(h->m_hAvs3, h->m_pBuffer + pos, h->m_dwDataLen - pos, pOut->pOutData + outindex, &outlen, &consumed);
 +		pos += consumed;
 +
@@ -2313,10 +2321,18 @@ index 0000000..33cfd7f
 +		h->m_lastMixtype = h->m_hAvs3->isMixedContent;
 +		h->m_lastBitrateTotal = h->m_hAvs3->totalBitrate;
 +
-+		if (outlen)
++		if (outlen) {
++			if (outindex + outlen > MAX_VIVID_SIZE) {
++				av_log(avctx, AV_LOG_ERROR, "output buffer overflow (%d + %d), reset decoder\n", outindex, outlen);
++				arcdav3a_decode_flush(avctx);
++				outindex = 0;
++				ret = AVS3_FALSE;
++				break;
++			}
 +			outindex += outlen;
-+		else
++		} else {
 +			break;
++		}
 +	} while (h->m_dwDataLen > pos);
 +
 +	if (outindex)
@@ -2371,7 +2387,7 @@ index 0000000..33cfd7f
 +	if (h->m_nlastChannels != pOut->nChannel)
 +	{
 +		if(h->m_pRenderBuffer)
-+		    av_freep(h->m_pRenderBuffer);
++		    av_freep(&h->m_pRenderBuffer);
 +		h->m_dwRenderBufferSize = h->m_dwRenderDataLen = 0;
 +		h->m_nlastChannels = pOut->nChannel;
 +	}
@@ -2392,7 +2408,7 @@ index 0000000..33cfd7f
 +		if (tmp)
 +			h->m_pRenderBuffer = tmp;
 +		else
-+			av_freep(h->m_pRenderBuffer);
++			av_freep(&h->m_pRenderBuffer);
 +	}
 +	if (!h->m_pRenderBuffer)
 +		return -1;
@@ -2448,6 +2464,10 @@ index 0000000..33cfd7f
 +			break;
 +		}
 +		av_log(avctx, AV_LOG_DEBUG, "end  GetBinauralInterleavedAudioBuffer!\n");
++		if (pOut->nlen + 1024 * pOut->nChannel * 2 > MAX_VIVID_SIZE) {
++			err = 1;
++			break;
++		}
 +		short* dst = (short*)(pOut->pOutData + pOut->nlen);
 +		for (int i = 0; i < 1024*pOut->nChannel; i++)
 +		{
@@ -2551,7 +2571,13 @@ index 0000000..33cfd7f
 +			}
 +			fclose(fpout);*/
 +			
-+			frm->nb_samples = 1024;
++			int bytes_per_sample = av_get_bytes_per_sample(AV_SAMPLE_FMT_S16);
++			int nb_samples = 0;
++			if (bytes_per_sample > 0 && h->out_frame.nChannel > 0)
++				nb_samples = h->out_frame.nlen / (bytes_per_sample * h->out_frame.nChannel);
++			if (nb_samples <= 0)
++				continue;
++			frm->nb_samples = nb_samples;
 +			frm->sample_rate = h->out_frame.nSamplerate;
 +			ChannelNumConfig chconf = (ChannelNumConfig)h->out_frame.nChCfg;
 +			av_channel_layout_uninit(&frm->ch_layout);
@@ -2590,7 +2616,11 @@ index 0000000..33cfd7f
 +			if(h->out_frame.nlen > 0)
 +			{
 +				av_log(avctx, AV_LOG_DEBUG, "begin copy buffer!\n");
-+				memcpy(frm->data[0], h->out_frame.pOutData, h->out_frame.nlen);
++				size_t expected = (size_t)frm->nb_samples * bytes_per_sample * h->out_frame.nChannel;
++				size_t copy_len = h->out_frame.nlen;
++				if (copy_len > expected)
++					copy_len = expected;
++				memcpy(frm->data[0], h->out_frame.pOutData, copy_len);
 +				av_log(avctx, AV_LOG_DEBUG, "end copy buffer!\n");
 +				/*if(fpout)
 +				{
