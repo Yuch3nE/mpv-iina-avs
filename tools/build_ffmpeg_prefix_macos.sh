@@ -595,6 +595,7 @@ CONFIGURE_FLAGS=(
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   CONFIGURE_FLAGS+=(--enable-gpl --enable-version3)
 fi
+CONFIGURE_FLAGS+=(--enable-libdav1d)
 CONFIGURE_FLAGS+=(--enable-libuavs3d)
 if [[ "$ENABLE_LIBARCDAV3A" == true ]]; then
   CONFIGURE_FLAGS+=(--enable-libarcdav3a)
