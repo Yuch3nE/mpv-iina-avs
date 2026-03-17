@@ -59,3 +59,41 @@ append_flags_from_env() {
     done
   fi
 }
+
+require_pkg_config_modules() {
+  local missing=()
+  local module
+
+  for module in "$@"; do
+    if ! "$PKG_CONFIG_BIN" --exists "$module"; then
+      missing+=("$module")
+    fi
+  done
+
+  if (( ${#missing[@]} == 0 )); then
+    return 0
+  fi
+
+  {
+    echo "Missing required pkg-config modules:"
+    printf '  %s\n' "${missing[@]}"
+    echo
+    echo "Install the corresponding development packages first, then rerun the build."
+  } >&2
+  exit 1
+}
+
+append_pkg_config_flag_prefixes() {
+  local module="$1"
+  local prefix="$2"
+  local value
+
+  while IFS= read -r value; do
+    [[ -n "$value" ]] || continue
+    case "$value" in
+      "$prefix"*)
+        printf '%s\n' "$value"
+        ;;
+    esac
+  done < <("$PKG_CONFIG_BIN" --cflags-only-I --libs-only-L "$module" 2>/dev/null | tr ' ' '\n')
+}

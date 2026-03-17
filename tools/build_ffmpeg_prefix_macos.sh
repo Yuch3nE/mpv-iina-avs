@@ -542,6 +542,87 @@ if [[ "$ENABLE_LIBARCDAV3A" == true ]]; then
   CPPFLAGS_ENTRIES+=("-I$AV3A_INSTALL_ROOT/include")
   LDFLAGS_ENTRIES+=("-L$AV3A_INSTALL_ROOT/lib")
 fi
+
+# Keep the FFmpeg feature set aligned with IINA's official ffmpeg-iina formula where practical.
+# Source: https://github.com/iina/homebrew-mpv-iina/blob/master/ffmpeg-iina.rb
+ffmpeg_common_pkg_modules=(
+  fontconfig
+  freetype2
+  gnutls
+  harfbuzz
+  libass
+  libbluray
+  libbs2b
+  dav1d
+  libjxl
+  libplacebo
+  libssh
+  libwebp
+  libxml-2.0
+  libzmq
+  rav1e
+  sdl2
+  soxr
+  speex
+  zimg
+)
+ffmpeg_gpl_pkg_modules=(
+  frei0r
+  rubberband
+  vidstab
+)
+
+snappy_prefix=""
+if [[ -n "${SNAPPY_PREFIX:-}" ]]; then
+  snappy_prefix="$SNAPPY_PREFIX"
+elif command -v brew >/dev/null 2>&1; then
+  snappy_prefix="$(brew --prefix snappy 2>/dev/null || true)"
+fi
+
+libsoxr_prefix=""
+if [[ -n "${LIBSOXR_PREFIX:-}" ]]; then
+  libsoxr_prefix="$LIBSOXR_PREFIX"
+elif command -v brew >/dev/null 2>&1; then
+  libsoxr_prefix="$(brew --prefix libsoxr 2>/dev/null || true)"
+fi
+
+require_pkg_config_modules "${ffmpeg_common_pkg_modules[@]}"
+if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
+  require_pkg_config_modules "${ffmpeg_gpl_pkg_modules[@]}"
+
+  # Homebrew's frei0r headers live in the Cellar include dir instead of a globally linked include
+  # path, while FFmpeg's configure checks for frei0r.h directly after pkg-config succeeds.
+  while IFS= read -r include_flag; do
+    CPPFLAGS_ENTRIES+=("$include_flag")
+  done < <(append_pkg_config_flag_prefixes frei0r -I)
+
+  while IFS= read -r include_flag; do
+    CPPFLAGS_ENTRIES+=("$include_flag")
+  done < <(append_pkg_config_flag_prefixes vidstab -I)
+
+  while IFS= read -r library_flag; do
+    LDFLAGS_ENTRIES+=("$library_flag")
+  done < <(append_pkg_config_flag_prefixes vidstab -L)
+fi
+
+if [[ -n "$snappy_prefix" ]]; then
+  if [[ -d "$snappy_prefix/include" ]]; then
+    CPPFLAGS_ENTRIES+=("-I$snappy_prefix/include")
+  fi
+  if [[ -d "$snappy_prefix/lib" ]]; then
+    LDFLAGS_ENTRIES+=("-L$snappy_prefix/lib")
+  fi
+fi
+
+if [[ -n "$libsoxr_prefix" ]]; then
+  if [[ -d "$libsoxr_prefix/include" ]]; then
+    CPPFLAGS_ENTRIES+=("-I$libsoxr_prefix/include")
+  fi
+  if [[ -d "$libsoxr_prefix/lib" ]]; then
+    LDFLAGS_ENTRIES+=("-L$libsoxr_prefix/lib")
+  fi
+fi
+
 export PKG_CONFIG_PATH="$(join_by : "${PKG_CONFIG_PATH_ENTRIES[@]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CPPFLAGS="$(join_by ' ' "${CPPFLAGS_ENTRIES[@]}")${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="$(join_by ' ' "${LDFLAGS_ENTRIES[@]}")${LDFLAGS:+ $LDFLAGS}"
@@ -560,18 +641,41 @@ CONFIGURE_FLAGS=(
   --disable-doc
   --disable-debug
   --enable-pic
+  --enable-gnutls
   --enable-videotoolbox
   --enable-vulkan
   --enable-audiotoolbox
   --enable-neon
   --enable-sdl2
   --enable-ffplay
+  --enable-libass
+  --enable-libbluray
+  --enable-libbs2b
+  --enable-libdav1d
+  --enable-libfontconfig
+  --enable-libfreetype
+  --enable-libharfbuzz
+  --enable-libjxl
+  --enable-libplacebo
+  --enable-librav1e
+  --enable-libsnappy
+  --enable-libsoxr
+  --enable-libspeex
+  --enable-libssh
+  --enable-libxml2
+  --enable-libwebp
+  --enable-libzmq
+  --enable-libzimg
+  --disable-libjack
+  --disable-indev=jack
+  --disable-libtesseract
 )
 if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   CONFIGURE_FLAGS+=(--enable-gpl --enable-version3)
+  CONFIGURE_FLAGS+=(--enable-frei0r)
+  CONFIGURE_FLAGS+=(--enable-librubberband)
+  CONFIGURE_FLAGS+=(--enable-libvidstab)
 fi
-CONFIGURE_FLAGS+=(--enable-libplacebo)
-CONFIGURE_FLAGS+=(--enable-libdav1d)
 CONFIGURE_FLAGS+=(--enable-libuavs3d)
 if [[ "$ENABLE_LIBARCDAV3A" == true ]]; then
   CONFIGURE_FLAGS+=(--enable-libarcdav3a)
