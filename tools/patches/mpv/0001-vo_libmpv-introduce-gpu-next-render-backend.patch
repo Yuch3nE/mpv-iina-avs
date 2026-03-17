@@ -459,8 +459,11 @@ index 0000000000000..31c0cb50bc986
 +    if (err < 0) return err;
 +    if (!target_tex) return MPV_ERROR_GENERIC;
 +
++    bool flip = *(int *)get_mpv_render_param(params, MPV_RENDER_PARAM_FLIP_Y,
++                                             &(int){0});
++
 +    // Render the video frame.
-+    pl_video_render(p->video_engine, frame, target_tex);
++    pl_video_render(p->video_engine, frame, target_tex, flip);
 +
 +    // Destroy the temporary wrapper texture via the RA.
 +    ra_next_tex_destroy(p->context->ra, &target_tex);
@@ -1549,13 +1552,20 @@ index 0000000000000..bb2e15eef39f6
 + * @param p The pl_video engine context.
 + * @param frame The mpv frame to render, containing the current image.
 + * @param target_tex The destination GPU texture to render to.
++ * @param target_flip Whether the render target uses inverted Y coordinates.
 + */
-+void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex)
++void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++                     bool target_flip)
 +{
 +    // Describe the target surface for libplacebo.
 +    struct pl_frame target_frame = {
 +        .num_planes = 1,
-+        .planes[0] = { .texture = target_tex, .components = 4, .component_mapping = {0,1,2,3} },
++        .planes[0] = {
++            .texture = target_tex,
++            .components = 4,
++            .component_mapping = {0,1,2,3},
++            .flipped = target_flip,
++        },
 +        .crop = { .x0 = p->current_dst.x0, .y0 = p->current_dst.y0, .x1 = p->current_dst.x1, .y1 = p->current_dst.y1 },
 +        .color = pl_color_space_srgb,
 +        .repr = pl_color_repr_rgb,
@@ -1846,7 +1856,8 @@ index 0000000000000..0f62ee2e94a2a
 +/**
 + * Synchronously renders a video frame to a display target using libplacebo.
 + */
-+void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex);
++void pl_video_render(struct pl_video *p, struct vo_frame *frame, pl_tex target_tex,
++                     bool target_flip);
 +
 +/**
 + * Synchronously renders `frame` into an sRGB temporary and returns a newly
