@@ -1755,7 +1755,7 @@ index 0000000000000..bb2e15eef39f6
 +static struct mp_image *download_hw_frame_for_upload(struct pl_video *p,
 +                                                     struct mp_image *mpi)
 +{
-+    if (!mpi || !mp_imgfmt_is_hwaccel(mpi->imgfmt))
++    if (!mpi || !IMGFMT_IS_HWACCEL(mpi->imgfmt))
 +        return mpi;
 +
 +    struct mp_image *sw = mp_image_hw_download(mpi, NULL);
