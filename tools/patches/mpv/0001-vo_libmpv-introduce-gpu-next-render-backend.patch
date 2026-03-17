@@ -321,9 +321,11 @@ new file mode 100644
 index 0000000000000..31c0cb50bc986
 --- /dev/null
 +++ b/video/out/gpu_next/libmpv_gpu_next.c
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,329 @@
 +#include "libmpv_gpu_next.h"
 +#include <stddef.h>             // for NULL
++#include <libavutil/error.h>    // for av_err2str
++#include <libavutil/hwcontext.h> // for AV_HWDEVICE_TYPE_VIDEOTOOLBOX
 +#include "common/msg.h"         // for mp_log_new, MP_ERR
 +#include "config.h"             // for HAVE_GL
 +#include "libplacebo/config.h"  // for PL_HAVE_OPENGL
@@ -336,6 +338,7 @@ index 0000000000000..31c0cb50bc986
 +#include "ta/ta_talloc.h"       // for talloc_free, talloc_zero
 +#include "video.h"              // for pl_video_check_format, pl_video_init
 +#include "video/hwdec.h"        // for hwdec_devices_create, hwdec_devices_d...
++#include "video/img_format.h"   // for IMGFMT_VIDEOTOOLBOX
 +#include "video/out/libmpv.h"   // for render_backend, get_mpv_render_param
 +#include "video/out/vo.h"       // for vo_frame (ptr only), voctrl_screenshot
 +
@@ -352,6 +355,7 @@ index 0000000000000..31c0cb50bc986
 +struct priv {
 +    struct libmpv_gpu_next_context *context; // Manages the API (e.g., OpenGL)
 +    struct pl_video *video_engine;           // Manages synchronous libplacebo rendering
++    struct mp_hwdec_ctx hwctx;               // Advertises direct VideoToolbox support
 +};
 +
 +/*
@@ -417,6 +421,24 @@ index 0000000000000..31c0cb50bc986
 +
 +    // Create hardware decoder devices.
 +    ctx->hwdec_devs = hwdec_devices_create();
++#if HAVE_GL && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++    if (ctx->hwdec_devs) {
++        p->hwctx = (struct mp_hwdec_ctx){
++            .driver_name = "videotoolbox",
++            .hw_imgfmt = IMGFMT_VIDEOTOOLBOX,
++        };
++
++        int ret = av_hwdevice_ctx_create(&p->hwctx.av_device_ref,
++                                         AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
++                                         NULL, NULL, 0);
++        if (ret == 0) {
++            hwdec_devices_add(ctx->hwdec_devs, &p->hwctx);
++        } else {
++            MP_WARN(ctx, "Failed to create VideoToolbox hwdevice for gpu-next: %s\n",
++                    av_err2str(ret));
++        }
++    }
++#endif
 +    ctx->driver_caps = VO_CAP_ROTATE90 | VO_CAP_VFLIP;
 +    return 0;
 +}
@@ -430,6 +452,12 @@ index 0000000000000..31c0cb50bc986
 +    struct priv *p = ctx->priv;
 +    if (!p) return;
 +
++#if HAVE_GL && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++    if (ctx->hwdec_devs && p->hwctx.av_device_ref) {
++        hwdec_devices_remove(ctx->hwdec_devs, &p->hwctx);
++        av_buffer_unref(&p->hwctx.av_device_ref);
++    }
++#endif
 +    hwdec_devices_destroy(ctx->hwdec_devs);
 +    pl_video_uninit(&p->video_engine);
 +    if (p->context) {
@@ -1232,18 +1260,24 @@ new file mode 100644
 index 0000000000000..bb2e15eef39f6
 --- /dev/null
 +++ b/video/out/gpu_next/video.c
-@@ -0,0 +1,582 @@
++@@ -0,0 +1,731 @@
 +#include "video.h"
 +#include <libplacebo/utils/frame_queue.h>  // for pl_source_frame, pl_queue_...
 +#include <stddef.h>                        // for NULL
 +#include <stdint.h>                        // for uint64_t, uint32_t, uintptr_t
++#include <string.h>                        // for memset
 +#include "assert.h"                        // for assert
 +#include "common/common.h"                 // for mp_rect, MPMAX, MP_ARRAY_SIZE
 +#include "common/msg.h"                    // for mp_msg, MSGL_ERR, MSGL_WARN
++#include "config.h"                        // for HAVE_GL, HAVE_VIDEOTOOLBOX_GL
 +#include "libplacebo/colorspace.h"         // for pl_color_adjustment, pl_co...
++#include "libplacebo/config.h"             // for PL_HAVE_OPENGL
 +#include "libplacebo/filters.h"            // for pl_filter_nearest
 +#include "libplacebo/gpu.h"                // for pl_tex_params, pl_tex_t
 +#include "libplacebo/renderer.h"           // for pl_frame_mix, pl_frame
++#if HAVE_GL && defined(PL_HAVE_OPENGL)
++#include "libplacebo/opengl.h"             // for pl_opengl_wrap, pl_opengl_get
++#endif
 +#include "sub/draw_bmp.h"                  // for mp_draw_sub_formats
 +#include "sub/osd.h"                       // for sub_bitmap, sub_bitmaps
 +#include "ta/ta_talloc.h"                  // for talloc_free, talloc_zero
@@ -1252,6 +1286,12 @@ index 0000000000000..bb2e15eef39f6
 +#include "video/mp_image.h"                // for mp_image, mp_image_params
 +#include "video/out/gpu_next/ra.h"         // for ra_next_find_fmt, ra_next_...
 +#include "video/out/vo.h"                  // for vo_frame
++#if HAVE_GL && defined(PL_HAVE_OPENGL) && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++#include <CoreVideo/CoreVideo.h>
++#include <IOSurface/IOSurface.h>
++#include <OpenGL/OpenGL.h>
++#include <OpenGL/CGLIOSurface.h>
++#endif
 +
 +// Forward declarations
 +struct mp_log;
@@ -1318,7 +1358,214 @@ index 0000000000000..bb2e15eef39f6
 + */
 +struct frame_priv {
 +    struct pl_video *p; // A pointer back to the main pl_video engine struct.
++    bool vt_mapped;
++    unsigned int vt_textures[PL_MAX_PLANES];
++    int vt_num_textures;
 +};
++
++/**
++ * @brief Initializes common libplacebo frame metadata from an mp_image.
++ * @param frame The destination frame.
++ * @param mpi The source mp_image.
++ * @param params The resolved image parameters to expose to libplacebo.
++ */
++static void init_frame_from_mpi(struct pl_frame *frame, struct mp_image *mpi,
++                                const struct mp_image_params *params)
++{
++    *frame = (struct pl_frame){
++        .color = params->color,
++        .repr = params->repr,
++        .profile = {
++            .data = mpi->icc_profile ? mpi->icc_profile->data : NULL,
++            .len = mpi->icc_profile ? mpi->icc_profile->size : 0,
++        },
++        .rotation = params->rotate / 90,
++        .user_data = mpi,
++    };
++}
++
++/**
++ * @brief Fills the plane/component mapping for a hwdec frame.
++ * @param frame The destination libplacebo frame.
++ * @param imgfmt The resolved software image format.
++ */
++static void fill_plane_component_mapping(struct pl_frame *frame, enum mp_imgfmt imgfmt)
++{
++    struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(imgfmt);
++    frame->num_planes = desc.num_planes;
++    for (int n = 0; n < frame->num_planes; n++) {
++        struct pl_plane *plane = &frame->planes[n];
++        int *map = plane->component_mapping;
++        for (int c = 0; c < mp_imgfmt_desc_get_num_comps(&desc); c++) {
++            if (desc.comps[c].plane != n)
++                continue;
++
++            uint8_t offset = desc.comps[c].offset;
++            int index = plane->components++;
++            while (index > 0 && desc.comps[map[index - 1]].offset > offset) {
++                map[index] = map[index - 1];
++                index--;
++            }
++            map[index] = c;
++        }
++    }
++}
++
++#if HAVE_GL && defined(PL_HAVE_OPENGL) && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++static bool videotoolbox_subfmt_to_gl(enum mp_imgfmt imgfmt, int plane,
++                                      GLint *out_iformat, GLenum *out_format,
++                                      GLenum *out_type)
++{
++    switch (imgfmt) {
++    case IMGFMT_NV12:
++        *out_iformat = plane == 0 ? GL_R8 : GL_RG8;
++        *out_format = plane == 0 ? GL_RED : GL_RG;
++        *out_type = GL_UNSIGNED_BYTE;
++        return true;
++    case IMGFMT_P010:
++    case IMGFMT_P016:
++        *out_iformat = plane == 0 ? GL_R16 : GL_RG16;
++        *out_format = plane == 0 ? GL_RED : GL_RG;
++        *out_type = GL_UNSIGNED_SHORT;
++        return true;
++    default:
++        return false;
++    }
++}
++
++static bool can_map_videotoolbox_direct(struct pl_video *p, const struct mp_image *mpi)
++{
++    if (!p || !mpi || mpi->imgfmt != IMGFMT_VIDEOTOOLBOX)
++        return false;
++
++    if (!pl_opengl_get(ra_get_gpu(p->ra)) || !CGLGetCurrentContext())
++        return false;
++
++    switch (mpi->params.hw_subfmt) {
++    case IMGFMT_NV12:
++    case IMGFMT_P010:
++    case IMGFMT_P016:
++        return true;
++    default:
++        return false;
++    }
++}
++
++static void cleanup_videotoolbox_frame(struct pl_video *p, struct pl_frame *frame,
++                                       unsigned int textures[PL_MAX_PLANES],
++                                       int *num_textures)
++{
++    if (!p || !num_textures)
++        return;
++
++    for (int n = 0; frame && n < frame->num_planes; n++) {
++        if (frame->planes[n].texture)
++            pl_tex_destroy(ra_get_gpu(p->ra), &frame->planes[n].texture);
++    }
++
++    if (*num_textures > 0)
++        glDeleteTextures(*num_textures, textures);
++
++    memset(textures, 0, sizeof(unsigned int) * PL_MAX_PLANES);
++    *num_textures = 0;
++}
++
++static bool map_videotoolbox_frame(struct pl_video *p, struct mp_image *mpi,
++                                   struct pl_frame *frame,
++                                   unsigned int textures[PL_MAX_PLANES],
++                                   int *num_textures)
++{
++    if (!can_map_videotoolbox_direct(p, mpi))
++        return false;
++
++    CVPixelBufferRef pbuf = (CVPixelBufferRef)mpi->planes[3];
++    if (!pbuf) {
++        mp_msg(p->log, MSGL_ERR, "gpu-next: missing CVPixelBuffer for VideoToolbox frame\n");
++        return false;
++    }
++
++    IOSurfaceRef surface = CVPixelBufferGetIOSurface(pbuf);
++    if (!surface) {
++        mp_msg(p->log, MSGL_ERR, "gpu-next: VideoToolbox frame has no IOSurface\n");
++        return false;
++    }
++
++    struct mp_image_params par = mpi->params;
++    par.imgfmt = par.hw_subfmt;
++    par.hw_subfmt = 0;
++    mp_image_params_guess_csp(&par);
++
++    init_frame_from_mpi(frame, mpi, &par);
++    fill_plane_component_mapping(frame, par.imgfmt);
++
++    const bool planar = CVPixelBufferIsPlanar(pbuf);
++    const int planes = planar ? CVPixelBufferGetPlaneCount(pbuf) : 1;
++    if (planes < frame->num_planes) {
++        mp_msg(p->log, MSGL_ERR, "gpu-next: unexpected VideoToolbox plane count %d for %s\n",
++               planes, mp_imgfmt_to_name(par.imgfmt));
++        return false;
++    }
++
++    glGenTextures(frame->num_planes, textures);
++    *num_textures = frame->num_planes;
++
++    for (int n = 0; n < frame->num_planes; n++) {
++        GLint iformat = 0;
++        GLenum format = 0;
++        GLenum type = 0;
++        if (!videotoolbox_subfmt_to_gl(par.imgfmt, n, &iformat, &format, &type)) {
++            mp_msg(p->log, MSGL_ERR, "gpu-next: unsupported VideoToolbox subfmt %s\n",
++                   mp_imgfmt_to_name(par.imgfmt));
++            goto error;
++        }
++
++        size_t width = planar ? CVPixelBufferGetWidthOfPlane(pbuf, n)
++                              : CVPixelBufferGetWidth(pbuf);
++        size_t height = planar ? CVPixelBufferGetHeightOfPlane(pbuf, n)
++                               : CVPixelBufferGetHeight(pbuf);
++
++        glBindTexture(GL_TEXTURE_RECTANGLE, textures[n]);
++        CGLError err = CGLTexImageIOSurface2D(CGLGetCurrentContext(),
++                                              GL_TEXTURE_RECTANGLE,
++                                              iformat,
++                                              width,
++                                              height,
++                                              format,
++                                              type,
++                                              surface,
++                                              planar ? n : 0);
++        glBindTexture(GL_TEXTURE_RECTANGLE, 0);
++
++        if (err != kCGLNoError) {
++            mp_msg(p->log, MSGL_ERR,
++                   "gpu-next: failed to import IOSurface plane %d: %s\n",
++                   n, CGLErrorString(err));
++            goto error;
++        }
++
++        frame->planes[n].texture = pl_opengl_wrap(
++            ra_get_gpu(p->ra),
++            pl_opengl_wrap_params(
++                .texture = textures[n],
++                .target = GL_TEXTURE_RECTANGLE,
++                .iformat = iformat,
++                .width = width,
++                .height = height));
++        if (!frame->planes[n].texture) {
++            mp_msg(p->log, MSGL_ERR,
++                   "gpu-next: failed to wrap imported IOSurface plane %d\n", n);
++            goto error;
++        }
++    }
++
++    return true;
++
++error:
++    cleanup_videotoolbox_frame(p, frame, textures, num_textures);
++    *frame = (struct pl_frame){0};
++    return false;
++}
++#endif
 +
 +/**
 + * @brief Callback to map an mp_image to a pl_frame for rendering.
@@ -1337,6 +1584,20 @@ index 0000000000000..bb2e15eef39f6
 +    struct mp_image *mpi = src->frame_data;
 +    struct frame_priv *fp = mpi->priv;
 +    struct pl_video *p = fp->p;
++
++#if HAVE_GL && defined(PL_HAVE_OPENGL) && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++    if (map_videotoolbox_frame(p, mpi, frame, fp->vt_textures,
++                               &fp->vt_num_textures)) {
++        fp->vt_mapped = true;
++        return true;
++    }
++
++    if (mpi->imgfmt == IMGFMT_VIDEOTOOLBOX) {
++        mp_msg(p->log, MSGL_ERR, "gpu-next: failed to map VideoToolbox frame directly\n");
++        talloc_free(mpi);
++        return false;
++    }
++#endif
 +
 +    // Use the RA helper to upload the mp_image data to a new set of textures
 +    // and populate the pl_frame struct with the result.
@@ -1368,7 +1629,15 @@ index 0000000000000..bb2e15eef39f6
 +    struct pl_video *p = fp->p;
 +
 +    // Use the RA helper to destroy the GPU textures associated with the frame.
-+    ra_cleanup_pl_frame(p->ra, frame);
++#if HAVE_GL && defined(PL_HAVE_OPENGL) && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++    if (fp->vt_mapped) {
++        cleanup_videotoolbox_frame(p, frame, fp->vt_textures, &fp->vt_num_textures);
++        fp->vt_mapped = false;
++    } else
++#endif
++    {
++        ra_cleanup_pl_frame(p->ra, frame);
++    }
 +    // Free the mp_image reference itself.
 +    talloc_free(mpi);
 +}
@@ -1675,10 +1944,19 @@ index 0000000000000..bb2e15eef39f6
 +    struct mp_image *res = NULL;
 +    struct pl_frame source_frame = {0};
 +    pl_tex fbo = NULL;
++    bool mapped_vt = false;
++    unsigned int vt_textures[PL_MAX_PLANES] = {0};
++    int vt_num_textures = 0;
 +
 +    // Upload the mp_image to a pl_frame via the RA helper.
++#if HAVE_GL && defined(PL_HAVE_OPENGL) && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++    if (map_videotoolbox_frame(p, frame->current, &source_frame,
++                               vt_textures, &vt_num_textures)) {
++        mapped_vt = true;
++    } else
++#endif
 +    if (!ra_upload_mp_image(p->ra, &source_frame, frame->current)) {
-+        mp_msg(p->log, MSGL_ERR, "pl_video_screenshot: failed to upload source image\n");
++        mp_msg(p->log, MSGL_ERR, "pl_video_screenshot: failed to prepare source image\n");
 +        return NULL;
 +    }
 +
@@ -1762,7 +2040,14 @@ index 0000000000000..bb2e15eef39f6
 +    if (fbo)
 +        ra_next_tex_destroy(p->ra, &fbo);
 +
-+    ra_cleanup_pl_frame(p->ra, &source_frame);
++#if HAVE_GL && defined(PL_HAVE_OPENGL) && (HAVE_VIDEOTOOLBOX_GL || HAVE_IOS_GL)
++    if (mapped_vt) {
++        cleanup_videotoolbox_frame(p, &source_frame, vt_textures, &vt_num_textures);
++    } else
++#endif
++    {
++        ra_cleanup_pl_frame(p->ra, &source_frame);
++    }
 +
 +    return res;
 +}
