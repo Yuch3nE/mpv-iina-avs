@@ -2668,6 +2668,7 @@ index 0000000000000..0f62ee2e94a2a
 +struct osd_state;
 +struct ra_next;
 +struct vo_frame;
++struct voctrl_screenshot;
 +
 +/**
 + * Initializes the rendering engine.
