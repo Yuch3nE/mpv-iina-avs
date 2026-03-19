@@ -42,7 +42,19 @@ jobs:
           brew install $BREW_PACKAGES
 
       - name: Build media stack
+        env:
+          CC: /usr/bin/clang
+          CXX: /usr/bin/clang++
+          AR: /usr/bin/ar
+          RANLIB: /usr/bin/ranlib
+          STRIP: /usr/bin/strip
+          LIBTOOL: /usr/bin/libtool
         run: |
+          export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
+          xcrun --find clang
+          xcrun --find clang++
+          xcrun --find ar
+          xcrun --find ranlib
           chmod +x tools/*.sh
           ./tools/build_all_macos.sh
 

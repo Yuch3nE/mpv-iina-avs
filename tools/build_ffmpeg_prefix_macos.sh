@@ -14,6 +14,49 @@ case "$LICENSE_FLAVOR" in
     ;;
 esac
 
+resolve_tool_path() {
+  local env_name="$1"
+  local xcrun_name="$2"
+  local fallback_name="$3"
+  local value="${!env_name:-}"
+
+  if [[ -n "$value" ]]; then
+    printf '%s' "$value"
+    return 0
+  fi
+
+  if command -v xcrun >/dev/null 2>&1; then
+    value="$(xcrun --find "$xcrun_name" 2>/dev/null || true)"
+    if [[ -n "$value" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  fi
+
+  command -v "$fallback_name"
+}
+
+CC_BIN="$(resolve_tool_path CC clang clang)"
+CXX_BIN="$(resolve_tool_path CXX clang++ clang++)"
+AR_BIN="$(resolve_tool_path AR ar ar)"
+RANLIB_BIN="$(resolve_tool_path RANLIB ranlib ranlib)"
+STRIP_BIN="$(resolve_tool_path STRIP strip strip)"
+LIBTOOL_BIN="$(resolve_tool_path LIBTOOL libtool libtool)"
+
+for tool_path in "$CC_BIN" "$CXX_BIN" "$AR_BIN" "$RANLIB_BIN" "$STRIP_BIN" "$LIBTOOL_BIN"; do
+  if [[ ! -x "$tool_path" ]]; then
+    echo "Required tool is not executable: $tool_path" >&2
+    exit 1
+  fi
+done
+
+export CC="$CC_BIN"
+export CXX="$CXX_BIN"
+export AR="$AR_BIN"
+export RANLIB="$RANLIB_BIN"
+export STRIP="$STRIP_BIN"
+export LIBTOOL="$LIBTOOL_BIN"
+
 fetch_git_ref() {
   local url="$1"
   local ref="$2"
@@ -42,7 +85,7 @@ clang_supports_arm64_flag() {
   local flag="$1"
   local tmp_obj
   tmp_obj="$(mktemp "${TMPDIR:-/tmp}/davs2-arm64-flag-check.XXXXXX.o")"
-  if printf 'int main(void) { return 0; }\n' | clang -arch arm64 -x c -c -o "$tmp_obj" - "$flag" >/dev/null 2>&1; then
+  if printf 'int main(void) { return 0; }\n' | "$CC_BIN" -arch arm64 -x c -c -o "$tmp_obj" - "$flag" >/dev/null 2>&1; then
     rm -f "$tmp_obj"
     return 0
   fi
@@ -275,9 +318,9 @@ for src in "${av3a_decoder_sources[@]}"; do
   rel="${src#$AV3A_DECODER_SOURCE_DIR/}"
   obj="$AV3A_DECODER_BUILD_DIR/${rel//\//_}.o"
   av3a_decoder_objects+=("$obj")
-  clang "${av3a_decoder_cflags[@]}" "${av3a_decoder_includes[@]}" -c "$src" -o "$obj"
+  "$CC_BIN" "${av3a_decoder_cflags[@]}" "${av3a_decoder_includes[@]}" -c "$src" -o "$obj"
 done
-libtool -static -o "$AV3A_INSTALL_ROOT/lib/libAVS3AudioDec.a" "${av3a_decoder_objects[@]}"
+"$LIBTOOL_BIN" -static -o "$AV3A_INSTALL_ROOT/lib/libAVS3AudioDec.a" "${av3a_decoder_objects[@]}"
 
 if [[ ! -f "$AV3A_INSTALL_ROOT/lib/libAVS3AudioDec.a" ]]; then
   echo "Static libAVS3AudioDec archive was not produced" >&2
@@ -310,12 +353,12 @@ for src in "${av3a_render_sources[@]}"; do
   obj="$AV3A_RENDER_BUILD_DIR/${rel//\//_}.o"
   av3a_render_objects+=("$obj")
   if [[ "$src" == *.c ]]; then
-    clang "${av3a_render_cflags[@]}" "${av3a_render_includes[@]}" -c "$src" -o "$obj"
+    "$CC_BIN" "${av3a_render_cflags[@]}" "${av3a_render_includes[@]}" -c "$src" -o "$obj"
   else
-    clang++ "${av3a_render_cxxflags[@]}" "${av3a_render_includes[@]}" -c "$src" -o "$obj"
+    "$CXX_BIN" "${av3a_render_cxxflags[@]}" "${av3a_render_includes[@]}" -c "$src" -o "$obj"
   fi
 done
-libtool -static -o "$AV3A_INSTALL_ROOT/lib/libav3a_binaural_render.a" "${av3a_render_objects[@]}"
+"$LIBTOOL_BIN" -static -o "$AV3A_INSTALL_ROOT/lib/libav3a_binaural_render.a" "${av3a_render_objects[@]}"
 
 if [[ ! -f "$AV3A_INSTALL_ROOT/lib/libav3a_binaural_render.a" ]]; then
   echo "Static libav3a_binaural_render archive was not produced" >&2
@@ -383,7 +426,7 @@ if [[ "$LICENSE_FLAVOR" == "gpl" ]]; then
   if [[ -n "$DAVS2_EFFECTIVE_EXTRA_LDFLAGS" ]]; then
     davs2_configure_args+=("--extra-ldflags=$DAVS2_EFFECTIVE_EXTRA_LDFLAGS")
   fi
-  if ! CC=clang CXX=clang++ ./configure "${davs2_configure_args[@]}"; then
+  if ! CC="$CC_BIN" CXX="$CXX_BIN" AR="$AR_BIN" RANLIB="$RANLIB_BIN" ./configure "${davs2_configure_args[@]}"; then
     if [[ -f config.log ]]; then
       echo "===== davs2 config.log (tail 400) =====" >&2
       tail -n 400 config.log >&2
@@ -596,11 +639,12 @@ export LDFLAGS="$(join_by ' ' "${LDFLAGS_ENTRIES[@]}")${LDFLAGS:+ $LDFLAGS}"
 
 log "Configuring FFmpeg"
 pushd "$SOURCE_DIR" >/dev/null
+log "Using Apple toolchain: CC=$CC_BIN CXX=$CXX_BIN AR=$AR_BIN RANLIB=$RANLIB_BIN STRIP=$STRIP_BIN"
 CONFIGURE_FLAGS=(
   --prefix="$FFMPEG_PREFIX"
   --arch="$TARGET_ARCH"
   --target-os=darwin
-  --cc=clang
+  --cc="$CC_BIN"
   --pkg-config="$PKG_CONFIG_BIN"
   --enable-shared
   --enable-pthreads
