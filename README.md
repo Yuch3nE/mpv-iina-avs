@@ -28,8 +28,10 @@ AV3A demuxer/parser/container handling draws from [openharmony/third_party_ffmpe
   - applies local `tools/patches/mpv/*.patch` compatibility fixes before configuring mpv
 - `tools/package_iina_bundle_macos.sh`
   - packages the `libmpv` + FFmpeg dylib set for IINA
+- `tools/package_media_kit_xcframeworks_macos.sh`
+  - wraps the `libmpv` dylib closure as media_kit-compatible macOS `.xcframework` archives
 - `tools/build_all_macos.sh`
-  - runs the full FFmpeg, CLI bundle, mpv, and IINA bundle flow
+  - runs the full FFmpeg, CLI bundle, mpv, IINA bundle, and media_kit xcframework flow
 - `tools/sync_bundle_to_iina.sh`
   - syncs the generated dylibs into a local IINA checkout for validation
 - `tools/package_macho_bundle.rb`
@@ -132,7 +134,34 @@ Default output location:
 - zip files: `artifacts`
 - manifest: `artifacts/iina-bundle-manifest.txt`
 
-### 5. Run the full pipeline
+### 5. Package the media_kit xcframework bundle
+
+Run:
+
+```bash
+./tools/package_media_kit_xcframeworks_macos.sh
+```
+
+This step mirrors the packaging shape used by `libmpv-darwin-build`: collected dylibs are wrapped as macOS `.framework` bundles, each framework is converted with `xcodebuild -create-xcframework`, and the xcframework set is archived under a single top-level directory.
+
+Default output location:
+
+- tar files: `artifacts/libmpv-xcframeworks_*.tar.gz`
+- manifest: `artifacts/media-kit-xcframeworks-manifest.txt`
+
+The default build is arm64-only, but the script also emits a `macos-universal` archive label for compatibility with existing `media_kit_libs_macos_video` Makefile naming. The xcframework slice remains `macos-arm64` unless another architecture is built and merged first.
+
+Useful overrides:
+
+```bash
+MEDIA_KIT_XCFRAMEWORKS_VERSION=0.6.6-avs \
+MEDIA_KIT_XCFRAMEWORKS_TARGET_LABELS="macos-arm64 macos-universal" \
+MEDIA_KIT_XCFRAMEWORKS_VARIANT=video \
+MEDIA_KIT_XCFRAMEWORKS_FLAVOR=full \
+./tools/package_media_kit_xcframeworks_macos.sh
+```
+
+### 6. Run the full pipeline
 
 Run:
 
@@ -146,6 +175,7 @@ Execution order:
 2. `package_ffmpeg_cli_bundle_macos.sh`
 3. `build_mpv_macos.sh`
 4. `package_iina_bundle_macos.sh`
+5. `package_media_kit_xcframeworks_macos.sh`
 
 ## Patch stack
 

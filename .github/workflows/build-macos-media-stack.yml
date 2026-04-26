@@ -12,12 +12,20 @@ on:
         description: 'Release tag to publish to (leave empty to auto-generate when publishing)'
         required: false
         type: string
+      media_kit_xcframeworks_version:
+        description: 'Version string embedded in media_kit xcframework archive names'
+        required: true
+        type: string
+        default: '0.6.6-avs'
 
 env:
   FFMPEG_VERSION: '8.1'
   LICENSE_FLAVOR: 'gpl'
   TARGET_ARCH: 'arm64'
   MPV_REF: 'v0.41.0'
+  MEDIA_KIT_XCFRAMEWORKS_TARGET_LABELS: 'macos-arm64 macos-universal'
+  MEDIA_KIT_XCFRAMEWORKS_VARIANT: 'video'
+  MEDIA_KIT_XCFRAMEWORKS_FLAVOR: 'full'
   BREW_PACKAGES: >-
     meson ninja pkg-config cmake nasm sdl2
     mujs luajit lua libass libarchive rubberband uchardet
@@ -49,6 +57,7 @@ jobs:
           RANLIB: /usr/bin/ranlib
           STRIP: /usr/bin/strip
           LIBTOOL: /usr/bin/libtool
+          MEDIA_KIT_XCFRAMEWORKS_VERSION: ${{ inputs.media_kit_xcframeworks_version }}
         run: |
           export PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:$PATH"
           xcrun --find clang
@@ -63,9 +72,12 @@ jobs:
         id: release_meta
         env:
           INPUT_TAG: ${{ inputs.release_tag }}
+          MEDIA_KIT_VERSION: ${{ inputs.media_kit_xcframeworks_version }}
         run: |
           if [[ -n "$INPUT_TAG" ]]; then
             tag="$INPUT_TAG"
+          elif [[ -n "$MEDIA_KIT_VERSION" ]]; then
+            tag="$MEDIA_KIT_VERSION"
           else
             tag="mpv-iina-avs-ffmpeg-${FFMPEG_VERSION}-mpv-${MPV_REF}-$(date -u +%Y%m%d-%H%M%S)"
           fi
