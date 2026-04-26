@@ -4,7 +4,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 require_cmd git meson ninja pkg-config install_name_tool otool
 
-MPV_GIT_URL="${MPV_GIT_URL:-https://github.com/mpv-player/mpv.git}"
+MPV_GIT_URL="${MPV_GIT_URL:-https://github.com/Yuch3nE/mpv.git}"
 MPV_SOURCE_DIR="$SOURCE_ROOT/mpv"
 MPV_BUILD_DIR="$WORK_ROOT/mpv-build"
 MESON_BIN="${MESON_BIN:-meson}"
@@ -25,19 +25,19 @@ log "Fetching mpv source"
 rm -rf "$MPV_SOURCE_DIR" "$MPV_BUILD_DIR" "$MPV_PREFIX"
 git init "$MPV_SOURCE_DIR" >/dev/null
 git -C "$MPV_SOURCE_DIR" remote add origin "$MPV_GIT_URL"
-git -C "$MPV_SOURCE_DIR" fetch --depth 1 origin "$MPV_REF"
+git -C "$MPV_SOURCE_DIR" fetch --depth 1 origin
 git -C "$MPV_SOURCE_DIR" checkout --detach FETCH_HEAD
 
-if [[ -d "$MPV_PATCH_ROOT" ]]; then
-  while IFS= read -r patch_path; do
-    log "Applying mpv $(basename "$patch_path")"
-    if ! git -C "$MPV_SOURCE_DIR" apply --check --recount --ignore-space-change --ignore-whitespace "$patch_path" >/dev/null 2>&1; then
-      echo "Failed to apply mpv patch: $patch_path" >&2
-      exit 1
-    fi
-    git -C "$MPV_SOURCE_DIR" apply --recount --ignore-space-change --ignore-whitespace "$patch_path"
-  done < <(find "$MPV_PATCH_ROOT" -maxdepth 1 -type f -name '*.patch' | sort)
-fi
+# if [[ -d "$MPV_PATCH_ROOT" ]]; then
+#   while IFS= read -r patch_path; do
+#     log "Applying mpv $(basename "$patch_path")"
+#     if ! git -C "$MPV_SOURCE_DIR" apply --check --recount --ignore-space-change --ignore-whitespace "$patch_path" >/dev/null 2>&1; then
+#       echo "Failed to apply mpv patch: $patch_path" >&2
+#       exit 1
+#     fi
+#     git -C "$MPV_SOURCE_DIR" apply --recount --ignore-space-change --ignore-whitespace "$patch_path"
+#   done < <(find "$MPV_PATCH_ROOT" -maxdepth 1 -type f -name '*.patch' | sort)
+# fi
 
 log "Configuring mpv"
 meson_flags=(
