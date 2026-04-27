@@ -565,7 +565,7 @@ fi
 # resulting prefix is prepended to PKG_CONFIG_PATH so it overrides whatever
 # system / Homebrew libplacebo might be present.
 LIBPLACEBO_GIT_URL="${LIBPLACEBO_GIT_URL:-https://github.com/haasn/libplacebo.git}"
-LIBPLACEBO_GIT_REF="${LIBPLACEBO_GIT_REF:-v7.360.1}"
+LIBPLACEBO_GIT_REF="${LIBPLACEBO_GIT_REF:-v7.360.0}"
 LIBPLACEBO_SOURCE_DIR="${LIBPLACEBO_SOURCE_DIR:-$SOURCE_ROOT/libplacebo}"
 LIBPLACEBO_INSTALL_ROOT="${LIBPLACEBO_INSTALL_ROOT:-$WORK_ROOT/libplacebo-install}"
 LIBPLACEBO_BUILD_DIR="${LIBPLACEBO_BUILD_DIR:-$WORK_ROOT/libplacebo-build}"
