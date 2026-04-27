@@ -21,6 +21,51 @@ export PKG_CONFIG_PATH="$(join_by : "${pkg_paths[@]}")${PKG_CONFIG_PATH:+:$PKG_C
 export CPPFLAGS="-I$FFMPEG_PREFIX/include${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="-L$FFMPEG_PREFIX/lib${LDFLAGS:+ $LDFLAGS}"
 
+# Locate MoltenVK + Vulkan headers so mpv's Vulkan render backend (used by the
+# libmpv gpu-next Vulkan API) can be enabled. Allow overrides via env vars,
+# fall back to Homebrew. If neither is available, leave Vulkan disabled.
+MOLTENVK_PREFIX="${MOLTENVK_PREFIX:-}"
+VULKAN_HEADERS_PREFIX="${VULKAN_HEADERS_PREFIX:-}"
+if [[ -z "$MOLTENVK_PREFIX" ]] && command -v brew >/dev/null 2>&1; then
+  MOLTENVK_PREFIX="$(brew --prefix molten-vk 2>/dev/null || true)"
+fi
+if [[ -z "$VULKAN_HEADERS_PREFIX" ]] && command -v brew >/dev/null 2>&1; then
+  VULKAN_HEADERS_PREFIX="$(brew --prefix vulkan-headers 2>/dev/null || true)"
+fi
+
+vulkan_meson_option="disabled"
+if [[ -n "$MOLTENVK_PREFIX" && -d "$MOLTENVK_PREFIX/lib" ]]; then
+  if [[ -n "$VULKAN_HEADERS_PREFIX" && -d "$VULKAN_HEADERS_PREFIX/include" ]]; then
+    export CPPFLAGS="-I$VULKAN_HEADERS_PREFIX/include $CPPFLAGS"
+  fi
+  if [[ -d "$MOLTENVK_PREFIX/include" ]]; then
+    export CPPFLAGS="-I$MOLTENVK_PREFIX/include $CPPFLAGS"
+  fi
+  export LDFLAGS="-L$MOLTENVK_PREFIX/lib $LDFLAGS"
+  # MoltenVK ships as libMoltenVK.dylib and acts as the Vulkan ICD on macOS.
+  # libplacebo / mpv link against the Vulkan loader API regardless; on macOS
+  # the dylib name is libvulkan.dylib provided by the Vulkan-Loader package
+  # (also available via brew). Detect optional vulkan-loader prefix.
+  VULKAN_LOADER_PREFIX="${VULKAN_LOADER_PREFIX:-}"
+  if [[ -z "$VULKAN_LOADER_PREFIX" ]] && command -v brew >/dev/null 2>&1; then
+    VULKAN_LOADER_PREFIX="$(brew --prefix vulkan-loader 2>/dev/null || true)"
+  fi
+  if [[ -n "$VULKAN_LOADER_PREFIX" && -d "$VULKAN_LOADER_PREFIX/lib" ]]; then
+    export LDFLAGS="-L$VULKAN_LOADER_PREFIX/lib $LDFLAGS"
+    if [[ -d "$VULKAN_LOADER_PREFIX/lib/pkgconfig" ]]; then
+      export PKG_CONFIG_PATH="$VULKAN_LOADER_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH"
+    fi
+  fi
+  if "$PKG_CONFIG_BIN" --exists vulkan; then
+    vulkan_meson_option="enabled"
+    log "Vulkan render backend will be enabled (MoltenVK at $MOLTENVK_PREFIX)"
+  else
+    log "Vulkan loader pkg-config not found; Vulkan render backend disabled"
+  fi
+else
+  log "MoltenVK not found (set MOLTENVK_PREFIX or 'brew install molten-vk'); Vulkan render backend disabled"
+fi
+
 log "Fetching mpv source"
 rm -rf "$MPV_SOURCE_DIR" "$MPV_BUILD_DIR" "$MPV_PREFIX"
 git init "$MPV_SOURCE_DIR" >/dev/null
@@ -50,6 +95,7 @@ meson_flags=(
   -Dmanpage-build=disabled
   -Dlua=enabled
   -Djavascript=enabled
+  "-Dvulkan=$vulkan_meson_option"
 )
 append_flags_from_env MPV_EXTRA_MESON_FLAGS meson_flags
 "$MESON_BIN" "${meson_flags[@]}"
