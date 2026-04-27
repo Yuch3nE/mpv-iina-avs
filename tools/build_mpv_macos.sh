@@ -17,6 +17,13 @@ MPV_PATCH_ROOT="$SCRIPT_DIR/patches/mpv"
 }
 
 pkg_paths=("$FFMPEG_PREFIX/lib/pkgconfig")
+LIBPLACEBO_INSTALL_ROOT="${LIBPLACEBO_INSTALL_ROOT:-$WORK_ROOT/libplacebo-install}"
+if [[ -d "$LIBPLACEBO_INSTALL_ROOT/lib/pkgconfig" ]]; then
+  # Prepend so our patched libplacebo wins over Homebrew's.
+  pkg_paths=("$LIBPLACEBO_INSTALL_ROOT/lib/pkgconfig" "${pkg_paths[@]}")
+  export CPPFLAGS="-I$LIBPLACEBO_INSTALL_ROOT/include${CPPFLAGS:+ $CPPFLAGS}"
+  export LDFLAGS="-L$LIBPLACEBO_INSTALL_ROOT/lib${LDFLAGS:+ $LDFLAGS}"
+fi
 export PKG_CONFIG_PATH="$(join_by : "${pkg_paths[@]}")${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 export CPPFLAGS="-I$FFMPEG_PREFIX/include${CPPFLAGS:+ $CPPFLAGS}"
 export LDFLAGS="-L$FFMPEG_PREFIX/lib${LDFLAGS:+ $LDFLAGS}"
