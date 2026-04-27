@@ -70,7 +70,10 @@ log "Fetching mpv source"
 rm -rf "$MPV_SOURCE_DIR" "$MPV_BUILD_DIR" "$MPV_PREFIX"
 git init "$MPV_SOURCE_DIR" >/dev/null
 git -C "$MPV_SOURCE_DIR" remote add origin "$MPV_GIT_URL"
-git -C "$MPV_SOURCE_DIR" fetch --depth 1 origin
+# MPV_REF defaults to a branch (macos-vulkan) carrying our hwdec_vt_pl
+# IOSurface fix; can be overridden to a tag/SHA via env.
+git -C "$MPV_SOURCE_DIR" fetch --depth 1 origin "$MPV_REF" || \
+    git -C "$MPV_SOURCE_DIR" fetch origin "$MPV_REF"
 git -C "$MPV_SOURCE_DIR" checkout --detach FETCH_HEAD
 
 # if [[ -d "$MPV_PATCH_ROOT" ]]; then
