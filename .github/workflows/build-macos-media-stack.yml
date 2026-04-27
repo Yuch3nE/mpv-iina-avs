@@ -22,7 +22,7 @@ env:
   FFMPEG_VERSION: '8.1'
   LICENSE_FLAVOR: 'gpl'
   TARGET_ARCH: 'arm64'
-  MPV_REF: 'v0.41.0'
+  MPV_REF: 'macos-vulkan'
   MEDIA_KIT_XCFRAMEWORKS_TARGET_LABELS: 'macos-arm64 macos-universal'
   MEDIA_KIT_XCFRAMEWORKS_VARIANT: 'video'
   MEDIA_KIT_XCFRAMEWORKS_FLAVOR: 'full'
